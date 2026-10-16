@@ -1,118 +1,98 @@
-# α6700 连接协议调查
+# α Remote · Sony α6700 iOS
 
-## 当前结论
+原生 iPhone / iPad 相机遥控 App。SwiftUI 使用 iOS 26 Liquid Glass；SSH、PTP/IP 与 Sony 扩展协议直接运行在手机进程内，连接时不依赖 Mac 中转。
 
-已完成可连接真实相机的协议原型。基于 Apache-2.0 许可的 [alpha2go](https://github.com/knallli/alpha2go)，打通了 SSH 认证、PTP 3.00、取景、参数控制、单次拍摄和图片传输。当前交付物运行在 Mac，尚未封装为 iPhone App。
+通过免费 Apple Account 的 Personal Team 安装。描述文件自签发起 **7 天有效**，到期后用同一团队和 Bundle ID 覆盖安装。Apple 的限制与流程见[开发者账户说明](https://developer.apple.com/help/account/basics/about-your-developer-account)。
 
-| 实机验证 | 本次结果 |
+<img src="docs/images/viewfinder.png" alt="α Remote 的原生玻璃取景界面，未连接状态" width="300">
+
+## 当前交付
+
+App 已构建、签名、安装并启动于 iPhone 13 Pro Max（iOS 27.0）。当前版本为 0.1.0，使用 iOS 26.4 SDK，最低支持 iOS 26。
+
+| 手机实测 | 结果 |
 |---|---|
-| 认证和初始化 | 成功；读取 350 项属性，相机另声明 369 个扩展属性和 57 个控制项 |
-| 实时取景 | 连续 3 帧 JPEG，1024×576；完整解码成功 |
-| 媒体列表 | 读取第一页 100 条内容；没有将第一页当作整张卡 |
-| 缩略图 | 取得 111,782 字节的响应；未单独验收缩略图格式 |
-| 原图和续传 | 下载 12,050,156 字节 JPEG；先取得 65,536 字节再断开会话，重新认证后续传 |
-| 续传一致性 | 与从头重新下载的完整文件比较，SHA256 一致 |
-| 参数写入 | ISO 250 → 200 → 250，每一步都读回确认，原值已恢复 |
-| 快门和拍摄回传 | 发出一次快门请求，得到一张 1920×1080 JPEG，141,015 字节；回传队列已清空 |
-| 重连 | 单次实测约 493 ms，重连后再次读取 350 项属性；这不是平均耗时或保证值 |
+| SSH 认证、指纹验证和 PTP 会话 | 成功连接 ILCE-6700，固件 2.00 |
+| 属性读取 | 350 项，附当前值、可写状态与可选范围 |
+| 实时取景 | JPEG 已在手机解码显示；测试时画面为黑色，未验收不同场景画质与长时稳定性 |
+| 媒体分页 | 读取 10,919 组影像，包含跨页读取 |
+| RAW 原文件导入 | 28,438,528 字节；手机文件取回 Mac 后，大小和 SHA256 与 App 记录一致 |
+| ISO 写入与读回 | 250 → 200 → 250，原值已恢复 |
+| 前后台恢复 | 切到主屏幕再返回，自动重连并恢复取景 |
+| 覆盖安装 | 认证信息及已导入 RAW 保留 |
+| 模拟器 UI | 断连快门禁用、连接表单和四页导航测试通过 |
 
-各次运行的结果、命令记录和输出文件保存在 [实测结果索引](evidence/validation-summary.json)。测试在相机上新增了一张照片。原型没有删除照片，也没有启动录像。
+这里的“全部参数”指相机通过当前协议返回的参数。**没有宣称覆盖机身菜单的每一项功能。** 相机声明的控制代码中，只有已经明确数据类型和行为的控制项开放操作。完整边界见 [功能与验证表](docs/CAPABILITIES.md)，持续记录见 [开发进度](docs/PROGRESS.md)。
 
-现场设备是 Creators’ App 3.5.0、iOS 27.0 和 ILCE-6700。相机自身报告固件为 2.00。调查时间为 2026-10-16，时区为 Asia/Shanghai。
+## 功能
 
-## 实机证据
+- 取景：JPEG 实时画面、构图网格、对焦框、电子水平仪、点击对焦区域和触控追踪。
+- 拍摄：自动对焦、快门、录像切换、拍摄回传、机身按键和拨轮。
+- 参数：按机身返回的能力生成全部属性列表，支持搜索、枚举、范围、字符串和数组；写前校验，写后读回。
+- 素材：分页读取、缩略图、按文件名或日期搜索、照片 / RAW / 视频原文件导入、暂停续传、分享和保存到系统照片。
+- 管理：OSD 叠层、相机设置备份与恢复、时间同步、LUT 上传、设备描述、显示文本和事件查看。
+- 恢复：进入后台断开连接，回到前台尝试重建会话；进行中的导入核对文件身份后继续。快门和录像请求不自动重发。
 
-| 已观察到的内容 | 含义与边界 |
-|---|---|
-| App 显示“已通过蓝牙进行连接” | 手机已保留蓝牙配对；不证明图传会话已建立 |
-| App 连接过程中显示“已通过接入点进行连接” | 本次使用了接入点连接路径 |
-| Mac 经 SSDP 发现 ILCE-6700，读取两个 XML 均返回 HTTP 200 | Mac 可以在当前局域网直接访问相机元数据 |
-| `X_PTP_Versions = 3.00` | 相机声明支持 PTP（Picture Transfer Protocol，图片传输协议）3.00 |
-| `X_PTP_RemoteControlSupport = Enable` | 相机声明支持遥控；具体命令仍待验证 |
-| `X_PTP_ContentsTransferSupport = Enable`、`X_PTP_MediaServerSupport = Enable` | 相机声明支持内容传输和媒体服务；没有实际下载文件 |
-| `X_PTP_PairingNecessity = Unnecessary` | 该服务描述没有要求 PTP 配对；不等于免认证 |
-| `X_SSH_Support = Enable`，TCP 22 返回 SSH banner | SSH（Secure Shell，安全外壳协议）服务可达 |
-| 直接连接 TCP 15740 返回拒绝 | 当前状态下不能直接建立明文 PTP/IP 连接；不代表相机始终关闭这个端口 |
+录像、删除、恢复设置、LUT 上传、大视频和部分控制项已有接口与 UI，尚未逐项完成本机实测。蓝牙唤醒、自动加入相机热点和后台持续导入尚未实现。
 
-服务发现使用 `urn:schemas-sony-com:service:DigitalImaging:1`。发现到的 HTTP 地址为 `http://192.168.5.98:64321/dd.xml`，它指向 `/DigitalImagingDesc.xml`。IP 可能随网络改变，应在客户端中动态发现。
+## 构建与安装
 
-后续实机验证已确认：通过 SSH 认证后，命令和事件连接可转发至相机的 `localhost:15740`，再建立 PTP/IP 和 Sony 会话。实时取景使用相机属性中给出的 HTTP 流，同样经过 SSH 转发。它与老机型的 ScalarWebAPI JSON 命令是不同路线。完整映射见 [PROTOCOL_MAP.md](PROTOCOL_MAP.md)。
-
-原始响应保存在 [实测目录](evidence/live-probe-20261016/)。REA 已解析其中的 HAR（HTTP Archive，HTTP 归档），证据编号为 `ev_decf2dac314122f076a3ec576ce5486f66ed3eb62a3e6fdb0fee1cbcebf50c27`。完整结果见 [REA 证据](evidence/rea-metadata-evidence.json)。这是我们在 Mac 上发起的两个元数据请求，并非手机 App 的抓包；REA 对归档的运行时归属保留为 unknown。
-
-## 断连与后台行为
-
-进入远程拍摄后，现场出现了 iOS 的相机访问提示，随后两次看到“已断开相机连接”。尚未建立稳定取景基线，也没有完成一次排除系统弹窗影响的前后台切换实验。因此，不能把本次断开直接归因于 Wi-Fi、蓝牙、心跳或 Sony 的某段代码。手机观察记录见 [phone-observations.json](evidence/phone-observations.json)。
-
-索尼把“后台保持相机连接”开关标为 Android 专属。iPhone 的客户端可以设计自动恢复，但不能承诺普通网络会话永久在后台运行。[Sony 相机页说明](https://helpguide.sony.net/di-app/ca/v1/en/contents/CA_camera_screen.html)
-
-iOS 26 及之后的 `BGContinuedProcessingTask` 支持用户在前台发起、在后台继续的有限任务，允许网络访问。它适合验证批量导入，需要显示进度、支持取消和处理系统终止。后台 HTTP 下载还可使用 `URLSession`；是否适用于这台相机，要先确认实际文件接口。[Apple 长任务说明](https://developer.apple.com/documentation/backgroundtasks/performing-long-running-tasks-on-ios-and-ipados)、[后台下载](https://developer.apple.com/documentation/foundation/downloading-files-in-the-background)
-
-若客户端使用 `NEHotspotConfiguration.joinOnce = true` 加入相机热点，进入后台超过 15 秒会触发热点断开。这是后续直连模式的排查项；当前没有证据说明 Creators’ App 在本次连接中使用了它。[Apple joinOnce](https://developer.apple.com/documentation/networkextension/nehotspotconfiguration/joinonce)
-
-## iPhone 客户端后续实现
-
-1. 将已验证的传输与会话逻辑接入原生 iOS 界面，支持取景、快门、参数与媒体选择。
-2. 持久化传输队列、文件身份和已确认的偏移量。返回前台后重建会话，避免重放快门命令。
-3. 实测 iOS 的后台导入任务、应用挂起和真实 Wi-Fi 断开。目前验证的是 Mac 主动中断会话后的恢复。
-4. 补测完整视频、大于 4 GiB 的文件和跨页媒体列表。
-5. 补蓝牙唤醒与网络切换，减少首次连接以外的手动操作。
-
-认证信息已通过本地窗口保存到这台 Mac 的钥匙串，后续运行直接复用。密码经本地进程管道传给客户端，没有放进命令行参数或项目配置文件。索尼的菜单路径是“网络 → 网络选项 → 访问认证信息”，其中含用户名、密码和指纹。[认证信息](https://helpguide.sony.net/ilc/2320/v1/en/contents/221h_access_authentication_information.html)、[认证设置](https://helpguide.sony.net/ilc/2320/v1/en/contents/221h_access_authentication_settings.html)
-
-Camera Remote Command 的官方完整参考包仍未取得，官方下载面向企业客户。本阶段使用开源项目的协议实现，并以本机实际响应验证所需功能，已不依赖该参考包推进核心原型。来源与许可见 [THIRD_PARTY.md](THIRD_PARTY.md)。[Command 入口与条件](https://support.d-imaging.sony.co.jp/app/cameraremotecommand/en/index.html)
-
-## 运行已验证的协议原型
-
-保持相机接入当前局域网，开启电脑遥控，然后运行：
+需要完整 Xcode 26 或更新版本、Go，以及已登录 Xcode 的 Apple Account。Go 会按 `go.mod` 下载固定的 Go 1.26 工具链及依赖。代码不依赖 CocoaPods、XcodeGen 或远程服务。
 
 ```sh
-cd /Users/class-undefined/sony-camera-investigation
-python3 run_camera_check.py info
-python3 run_camera_check.py liveview
-python3 run_camera_check.py list
-python3 run_camera_check.py thumbnail
-python3 run_camera_check.py reconnect
-python3 run_camera_check.py resume-check
+git clone --recurse-submodules https://github.com/class-undefined/alpha6700-ios.git
+cd alpha6700-ios
+open ios/AlphaRemote.xcodeproj
 ```
 
-每条命令是单独的一次验证，都会创建新证据目录。`resume-check` 从第一页挑选一个不超过 64 MiB 的静态影像，先续传，再完整下载一遍用于比对。它不会批量导出整张卡。
+在 Xcode 中选择 `AlphaRemote` target，在 Signing & Capabilities 选择自己的 Personal Team。连接 iPhone，启用开发者模式，选择手机并运行。
 
-以下两个命令会实际操作相机：
+也可以在被 Git 忽略的 `ios/Local.xcconfig` 中配置：
+
+```xcconfig
+DEVELOPMENT_TEAM = YOUR_TEAM_ID
+// 如标识已被占用，可改为自己唯一的标识。
+PRODUCT_BUNDLE_IDENTIFIER = com.yourname.alpha6700
+```
+
+然后执行以下命令。只有一台配对的 iOS 设备时可省略设备标识：
 
 ```sh
-python3 run_camera_check.py iso-roundtrip
-python3 run_camera_check.py capture-once
+scripts/install-device.sh
+# 或 scripts/install-device.sh DEVICE_IDENTIFIER
 ```
 
-`iso-roundtrip` 临时使用一个相机报告可选的 ISO 值，随后恢复并读回原值。`capture-once` 只在当前已处于单张拍摄、照片模式且开启主机回传时发出一次快门请求，新增一张照片。请求结果不确定时不会自动重拍。
+脚本自动构建协议静态库、签名、覆盖安装、启动 App，并打印实际签名到期时间。续签运行同一命令，保留同一 Team 和 Bundle ID。Xcode 可能复用尚未到期的描述文件，不能把一次提前重装当成已经延长了 7 天，以脚本打印的日期为准。详细步骤与排错见 [安装说明](docs/INSTALL.md)。
 
-验证程序源码在 [prototype](prototype/)。上游测试已通过；自编的续传回滚、空卡处理、文件身份核对、错误脱敏和 ISO 恢复测试通过了 Go race 检查。
+## 连接相机
 
-## 运行已实现的探测工具
+1. 让 iPhone 与相机加入同一局域网，开启相机的电脑遥控。退出其他 App 的远程拍摄或导入会话。
+2. 在机身查看“网络 → 网络选项 → 访问认证信息”，填入 IP、用户名、访问认证密码和 SHA256 指纹。
+3. 在 iPhone 允许局域网访问，然后连接。首次权限弹窗可能令当前请求失败，授权后再点一次连接。
 
-Mac 与相机连接同一局域网，相机保持开启网络服务，然后运行：
+认证信息只保存在 iOS Keychain。访问认证密码与 Wi-Fi 密码不同。App 会先验证相机指纹，再发送密码。[Sony 认证说明](https://helpguide.sony.net/ilc/2320/v1/en/contents/221h_access_authentication_information.html)
+
+免费签名版本通过单播查找相机，也支持手填 IP。SSDP 多播需要 Apple 授权的 entitlement，本版本不依赖它。[Apple 多播权限说明](https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.developer.networking.multicast)
+
+## 验证与项目结构
 
 ```sh
-cd /Users/class-undefined/sony-camera-investigation
-python3 sony_probe.py
+scripts/check.sh
+xcodebuild -project ios/AlphaRemote.xcodeproj -scheme AlphaRemote \
+  -destination 'platform=iOS Simulator,name=iPhone 17 Pro' \
+  -derivedDataPath build/DerivedData CODE_SIGNING_ALLOWED=NO test
 ```
 
-程序只依赖 Python 标准库。它发送 Sony 服务发现请求，读取相机的设备和能力 XML，然后测试 SSH 与 PTP/IP 端口。每次运行创建新的证据目录，保存 JSON、XML 和 HAR。程序不会登录、配对、拍摄、修改参数或下载媒体。
-
-该发现程序实机找到一台 ILCE-6700，两个 HTTP 请求成功。它保留为无需认证的独立诊断入口。
-
-## 调查清单
-
-| 问题 | 状态 |
+| 路径 | 内容 |
 |---|---|
-| 手机 App、相机型号、相机固件 | 已确认 |
-| 实机声明的协议、服务与能力 | 已确认 |
-| 局域网发现与描述读取 | 已实现并实测 |
-| 实际认证与 PTP/IP 握手 | 已实现并实测 |
-| 完整命令集与机型兼容矩阵 | 所需核心命令已有开源实现与本机验证，未覆盖全部命令 |
-| 本机切后台断开的根因 | 未确认 |
-| 拍摄、取景、ISO 调整与图片导入 | 已实现并实测 |
-| 会话中断后的重连和图片续传 | 已实测，文件 SHA256 比对一致 |
-| 完整视频与大文件传输 | 待实测 |
-| iPhone App、iOS 后台任务与恢复体验 | 尚未实现到手机端 |
+| `ios/AlphaRemote/` | SwiftUI、Keychain、照片导入、原生 C 桥接 |
+| `mobile/core/` | 协议会话、动态属性、控制与持久化传输 |
+| `mobile/bridge/` | Go 到 C ABI 导出 |
+| `vendor/alpha2go/` | 固定版本的 Apache-2.0 上游子模块 |
+| `prototype/` | 保留的 Mac 协议验证程序 |
+| `docs/` | 安装、架构、功能矩阵和进度 |
+| `evidence/` | 本机原始证据，未公开 |
+
+[架构说明](docs/ARCHITECTURE.md) · [协议映射](PROTOCOL_MAP.md) · [早期调查记录](docs/PROTOCOL_RESEARCH.md) · [第三方来源](THIRD_PARTY.md)
+
+本项目与 Sony 无隶属关系。许可证为 Apache-2.0；第三方许可证随源码和 App 保留。
