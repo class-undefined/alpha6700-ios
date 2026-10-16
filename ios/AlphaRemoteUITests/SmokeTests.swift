@@ -97,6 +97,37 @@ extension XCTestExpectation {
 }
 
 extension SmokeTests {
+  @MainActor func testCompactLiveFullscreenAndRestore() throws {
+    XCUIDevice.shared.orientation = .portrait
+    defer { XCUIDevice.shared.orientation = .portrait }
+    let app = XCUIApplication()
+    app.launchArguments = ["--ui-fixtures"]
+    app.launch()
+    let image = app.images["liveImage"]
+    XCTAssertTrue(image.waitForExistence(timeout: 8))
+    let portraitWidth = image.frame.width
+    XCTAssertGreaterThan(
+      portraitWidth, app.frame.width - 4, "The normal viewfinder should use the full screen width")
+    save(app, "08-compact-live")
+    app.buttons["enterFullScreen"].tap()
+    let landscape = NSPredicate { _, _ in app.frame.width > app.frame.height }
+    XCTAssertTrue(expectation(for: landscape, evaluatedWith: app).wait(timeout: 8))
+    XCTAssertTrue(app.buttons["exitFullScreen"].exists)
+    XCTAssertFalse(app.tabBars.firstMatch.isHittable)
+    XCTAssertGreaterThan(image.frame.width, portraitWidth * 1.2)
+    let renderedLandscape = NSPredicate { _, _ in
+      let size=app.screenshot().image.size
+      return size.width>size.height
+    }
+    XCTAssertTrue(expectation(for:renderedLandscape,evaluatedWith:app).wait(timeout:8))
+    save(app, "09-fullscreen-live")
+    app.buttons["exitFullScreen"].tap()
+    XCTAssertTrue(
+      expectation(
+        for: NSPredicate { _, _ in app.frame.width < app.frame.height }, evaluatedWith: app
+      ).wait(timeout: 8))
+    XCTAssertTrue(app.tabBars.buttons["素材"].isHittable)
+  }
   @MainActor func testLongPressSelectionFormatsAndBatchExport() throws {
     XCUIDevice.shared.orientation = .portrait
     let app = XCUIApplication()

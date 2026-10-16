@@ -143,17 +143,28 @@ struct TactileParameterSheet: View {
   @Environment(CameraModel.self) private var camera
   @Environment(\.dismiss) private var dismiss
   let property: CameraProperty
+  var cameraStyle = false
   var body: some View {
     NavigationStack {
       VStack(spacing: 16) {
         TactileParameterControl(property: property)
         if let automatic = property.dialChoices.first(where: { $0.value == "16777215" }) {
-          Button("自动 ISO") { camera.scheduleDial(code: property.code, value: automatic.value) }
-            .buttonStyle(.glass)
+          if cameraStyle {
+            Button("AUTO ISO") { camera.scheduleDial(code: property.code, value: automatic.value) }
+              .buttonStyle(CameraLCDButtonStyle()).font(
+                .system(size: 12, weight: .semibold, design: .monospaced)
+              ).padding(10).overlay { Rectangle().stroke(.white.opacity(0.25), lineWidth: 0.5) }
+          } else {
+            Button("自动 ISO") { camera.scheduleDial(code: property.code, value: automatic.value) }
+              .buttonStyle(.glass)
+          }
         }
         Spacer(minLength: 0)
       }.navigationTitle(property.title).navigationBarTitleDisplayMode(.inline)
-        .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
+        .toolbar {
+          ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } }
+            .sharedBackgroundVisibility(cameraStyle ? .hidden : .automatic)
+        }
     }.presentationDetents([.height(300), .medium])
   }
 }
