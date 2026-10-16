@@ -187,3 +187,16 @@ func TestCatalogIsNamesOnlyAndDoesNotEnableWrites(t *testing.T) {
 		t.Fatal("incomplete name catalog")
 	}
 }
+
+func TestPTPStringUTF16LengthAndURLRedaction(t *testing.T) {
+	if _, err := parseValue(0xffff, strings.Repeat("😀", 128)); err == nil {
+		t.Fatal("PTP UTF-16 character count overflow accepted")
+	}
+	if _, err := parseValue(0xffff, strings.Repeat("😀", 127)); err != nil {
+		t.Fatal(err)
+	}
+	reply := encodeReply(nil, errors.New("GET http://localhost/live?token=private-value failed"))
+	if strings.Contains(reply, "private-value") {
+		t.Fatal("stream token leaked")
+	}
+}

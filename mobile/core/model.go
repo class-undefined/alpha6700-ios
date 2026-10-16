@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode/utf16"
 
 	"github.com/knallli/alpha2go/propdb"
 	"github.com/knallli/alpha2go/ptpip"
@@ -77,7 +78,7 @@ func valueText(t uint16, v ptpip.SonyValue) string {
 func parseValue(t uint16, text string) (ptpip.SonyValue, error) {
 	var v ptpip.SonyValue
 	if t == 0xffff {
-		if len([]rune(text)) > 254 {
+		if len(utf16.Encode([]rune(text))) > 254 {
 			return v, errors.New("String is too long")
 		}
 		v.Str = text
