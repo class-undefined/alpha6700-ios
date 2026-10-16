@@ -196,7 +196,7 @@ private struct SelectableMediaCell: View {
           GeometryReader { g in
             Image(uiImage: image).resizable().scaledToFill().frame(
               width: g.size.width, height: g.size.height
-            ).clipped()
+            ).clipped().accessibilityHidden(true)
           }
         } else {
           Image(systemName: item.previewFile?.video == true ? "video" : "photo").foregroundStyle(
@@ -219,7 +219,7 @@ private struct SelectableMediaCell: View {
             Image(systemName: "lock.fill").font(.caption2).padding(6).shadow(radius: 2)
           }
         }
-      }.aspectRatio(1, contentMode: .fit).clipped()
+      }.aspectRatio(1, contentMode: .fit).clipped().contentShape(Rectangle())
         .overlay { if selected { Rectangle().strokeBorder(.blue, lineWidth: 2) } }
     }.buttonStyle(.plain)
       .highPriorityGesture(LongPressGesture(minimumDuration: 0.35).onEnded { _ in onLongPress() })
