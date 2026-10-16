@@ -132,8 +132,10 @@ struct ConnectionView: View {
               Text(camera.connecting ? "正在连接…" : "连接 α6700")
               Spacer()
             }
-          }.buttonStyle(.glassProminent).disabled(camera.busy || !camera.access.complete)
-            .accessibilityIdentifier("connectCamera")
+          }.buttonStyle(.glassProminent).disabled(
+            camera.busy || camera.exporting || !camera.access.complete
+          )
+          .accessibilityIdentifier("connectCamera")
           if camera.connected || camera.connecting {
             Button("断开连接", role: .destructive) {
               camera.disconnect()

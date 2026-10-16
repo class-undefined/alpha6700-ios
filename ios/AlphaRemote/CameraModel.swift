@@ -77,7 +77,7 @@ import SwiftUI
     #endif
   }
   func connect() async {
-    guard !busy && !connecting else { return }
+    guard !busy && !connecting && !exporting && !importing else { return }
     guard let fp = KeychainStore.normalizedFingerprint(access.fingerprint) else {
       error = "请填写相机屏幕上的 SHA256 指纹。"
       return
@@ -164,6 +164,9 @@ import SwiftUI
           await importFile(next.0, next.1, expectedKey: next.2)
         }
       }
+    } else if phase == .active && resumeExportsOnForeground {
+      resumeExportsOnForeground = false
+      Task { await runExports() }
     }
   }
   func startLive() async {

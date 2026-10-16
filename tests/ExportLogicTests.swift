@@ -70,12 +70,18 @@ import Foundation
       reopened.activeIDs == converted.jobs.map(\.id), "Queued files must survive restart")
     try reopened.enqueue(converted)
     precondition(reopened.jobs.count == 2, "Enqueuing the same selection must not duplicate jobs")
+    let completed = temporary.appendingPathComponent("done.JPG")
+    try Data("fixture".utf8).write(to: completed)
+    try reopened.update(converted.jobs[0].id, status: .complete, output: completed)
+    try reopened.resumeAll()
+    precondition(
+      reopened.activeIDs.count == 2, "Resuming must preserve the completed members of the batch")
     do {
       try reopened.update(
         converted.jobs[0].id, status: .complete, output: URL(fileURLWithPath: "/tmp/outside.JPG"))
       preconditionFailure("escaped export path accepted")
     } catch {}
     print(
-      "Export planning, persistence, format preferences and viewfinder geometry: 15 checks passed")
+      "Export planning, persistence, format preferences and viewfinder geometry: 16 checks passed")
   }
 }

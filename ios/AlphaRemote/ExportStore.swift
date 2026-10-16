@@ -62,7 +62,11 @@ import Observation
     }
     try persist(next, active: plan.jobs.map(\.id))
   }
-  func resumeAll() throws { try persist(jobs, active: unfinished.map(\.id)) }
+  func resumeAll() throws {
+    var ids = activeIDs
+    for job in unfinished where !ids.contains(job.id) { ids.append(job.id) }
+    try persist(jobs, active: ids)
+  }
   func update(_ id: String, status: ExportStatus, output: URL? = nil, error: String? = nil) throws {
     guard let i = jobs.firstIndex(where: { $0.id == id }) else { return }
     var next = jobs
