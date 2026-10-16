@@ -56,7 +56,9 @@ struct PropertiesView: View {
       await camera.refreshStatus()
     }
     .toolbar { ToolbarItem(placement: .topBarTrailing) { ConnectionBadge() } }
-    .sheet(item: $selected) { PropertyEditor(property: $0) }
+    .sheet(item: $selected) { p in
+      if p.usesRuler { TactileParameterSheet(property: p) } else { PropertyEditor(property: p) }
+    }
   }
 }
 struct PropertyEditor: View {
@@ -81,7 +83,9 @@ struct PropertyEditor: View {
           }
         }
         if current.writable && current.code != 0xD278 {
-          if current.form == 2 {
+          if [0x5005, 0x500A, 0xD22C].contains(current.code) && current.form == 2 {
+            Section { TactileChoiceControl(property: current) }
+          } else if current.form == 2 {
             Section("相机当前允许的值") {
               ForEach(current.choices, id: \.value) { choice in
                 Button {

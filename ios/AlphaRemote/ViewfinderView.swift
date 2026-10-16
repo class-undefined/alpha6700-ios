@@ -30,7 +30,33 @@ struct ViewfinderView: View {
                 ).tracking(1)
               }.padding(10).glassEffect(.regular, in: .capsule).padding(12)
             }
-            .overlay(alignment: .bottomTrailing) {
+            .overlay(alignment: .topTrailing) {
+              let mode = camera.properties.first { $0.code == 0x500E }
+              let battery = camera.properties.first { $0.code == 0xD218 || $0.code == 0x5001 }
+                .flatMap { Int($0.value) }.flatMap { (0...100).contains($0) ? $0 : nil }
+              if mode != nil || battery != nil {
+                HStack(spacing: 8) {
+                  if let mode { Text(mode.formatted).font(.caption.weight(.semibold)) }
+                  if let battery {
+                    Label(
+                      "\(battery)%",
+                      systemImage: battery > 20 ? "battery.75percent" : "battery.25percent"
+                    ).font(.caption2)
+                  }
+                }.padding(9).glassEffect(.regular, in: .capsule).padding(12)
+              }
+            }
+            .overlay(alignment: .bottom) {
+              GlassEffectContainer(spacing: 6) {
+                HStack(spacing: 6) {
+                  quickSetting(0xD21E, label: "ISO", fallback: "—")
+                  quickSetting(0x5007, label: "光圈", fallback: "ƒ/—")
+                  quickSetting(0xD20D, label: "快门", fallback: "—")
+                  quickSetting(0x5010, label: "曝光", fallback: "±0")
+                }.padding(10)
+              }
+            }
+            .overlay(alignment: .trailing) {
               if let level = camera.snapshot?.liveMeta.Level, level.State == 2,
                 (-180...180).contains(level.X)
               {
@@ -39,13 +65,10 @@ struct ViewfinderView: View {
                 ).padding(12)
               }
             }
-          GlassEffectContainer(spacing: 12) {
-            HStack(spacing: 8) {
-              quickSetting(0xD21E, label: "ISO", fallback: "—")
-              quickSetting(0x5007, label: "光圈", fallback: "ƒ/—")
-              quickSetting(0xD20D, label: "快门", fallback: "—")
-              quickSetting(0x5010, label: "曝光", fallback: "±0")
-            }
+          HStack(spacing: 10) {
+            secondarySetting(0x500A, icon: "scope", label: "对焦")
+            secondarySetting(0x5005, icon: "sun.max", label: "白平衡")
+            secondarySetting(0xD20F, icon: "thermometer.medium", label: "色温")
           }
           HStack(spacing: 26) {
             Button {
@@ -94,7 +117,10 @@ struct ViewfinderView: View {
               Image(systemName: "rectangle.on.rectangle")
             }.disabled(!camera.ready).accessibilityLabel("相机屏幕叠层")
             Button {
-              Task { if camera.live { await camera.stopLive() } else { await camera.startLive() } }
+              Task {
+                camera.preferLive = !camera.live
+                if camera.live { await camera.stopLive() } else { await camera.startLive() }
+              }
             } label: {
               Image(systemName: camera.live ? "pause" : "play")
             }.disabled(!camera.ready).accessibilityLabel("暂停或恢复取景")
@@ -118,7 +144,9 @@ struct ViewfinderView: View {
           maxWidth: .infinity)
       }.background(Theme.background)
     }.toolbar(.hidden, for: .navigationBar)
-      .sheet(item: $property) { PropertyEditor(property: $0) }
+      .sheet(item: $property) { p in
+        if p.usesRuler { TactileParameterSheet(property: p) } else { PropertyEditor(property: p) }
+      }
       .confirmationDialog("切换相机录像状态", isPresented: $movieConfirm, titleVisibility: .visible) {
         Button("发送开始 / 停止录像请求") {
           Task { await camera.perform("movie", success: "录像切换已发送，请以机身的 REC 状态为准") }
@@ -136,9 +164,22 @@ struct ViewfinderView: View {
         Text(label).font(.system(size: 9, weight: .medium)).tracking(1).foregroundStyle(.secondary)
         Text(p?.formatted ?? fallback).font(.system(size: 16, weight: .medium, design: .rounded))
           .lineLimit(1).minimumScaleFactor(0.6)
-      }.frame(maxWidth: .infinity).padding(.vertical, 14)
-    }.buttonStyle(.plain).glassEffect(.regular.interactive(), in: .rect(cornerRadius: 18)).disabled(
-      p == nil || !camera.ready)
+      }.frame(maxWidth: .infinity).padding(.vertical, 9)
+    }.buttonStyle(.plain).accessibilityIdentifier("quick-\(code)").glassEffect(
+      .regular.interactive(), in: .rect(cornerRadius: 18)
+    ).disabled(
+      p == nil || !camera.connected || camera.importing)
+  }
+  private func secondarySetting(_ code: Int, icon: String, label: String) -> some View {
+    let p = camera.properties.first { $0.code == code }
+    return Button {
+      property = p
+    } label: {
+      HStack(spacing: 6) {
+        Image(systemName: icon)
+        Text(p?.formatted ?? label).lineLimit(1).minimumScaleFactor(0.7)
+      }.font(.caption).frame(maxWidth: .infinity).padding(.vertical, 10)
+    }.buttonStyle(.glass).disabled(p == nil || !camera.connected || camera.importing)
   }
   private var viewfinder: some View {
     GeometryReader { g in

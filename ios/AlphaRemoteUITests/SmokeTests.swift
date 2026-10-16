@@ -60,6 +60,27 @@ extension SmokeTests {
     app.buttons["closePhotoBrowser"].tap()
     XCTAssertTrue(app.tabBars.buttons["素材"].exists)
   }
+  @MainActor func testISORulerWritesSettledSelection() throws {
+    let app = XCUIApplication()
+    app.launchArguments = ["--ui-fixtures"]
+    app.launch()
+    let iso = app.buttons["quick-\(0xD21E)"]
+    XCTAssertTrue(iso.waitForExistence(timeout: 8))
+    iso.tap()
+    let value = app.staticTexts["cameraValue-\(0xD21E)"]
+    XCTAssertTrue(value.waitForExistence(timeout: 3))
+    XCTAssertTrue(value.label.contains("250"))
+    let ruler = app.descendants(matching: .any).matching(identifier: "parameterRuler-\(0xD21E)")
+      .firstMatch
+    XCTAssertTrue(ruler.exists)
+    ruler.swipeLeft()
+    let changed = NSPredicate(format: "NOT label CONTAINS %@", "250")
+    XCTAssertTrue(expectation(for: changed, evaluatedWith: value).wait(timeout: 4))
+    save(app, "07-iso-ruler")
+    XCTAssertFalse(app.sheets["设置ISO"].exists)
+    app.buttons["完成"].tap()
+    XCTAssertTrue(app.buttons["shutter"].exists)
+  }
   @MainActor private func waitFor(_ element: XCUIElement, contains: String) -> Bool {
     expectation(for: NSPredicate(format: "label CONTAINS %@", contains), evaluatedWith: element)
       .wait(timeout: 6)
