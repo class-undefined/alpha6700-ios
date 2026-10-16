@@ -32,6 +32,13 @@ struct CameraSettingsView: View {
             "参数 / 控制项", value: "\(snapshot.properties.count) / \(snapshot.controls.count)")
         }
       }
+      Section("照片导出") {
+        NavigationLink {
+          ExportSettingsView()
+        } label: {
+          LabeledContent("导出格式", value: camera.exports.format.title)
+        }.accessibilityIdentifier("exportSettingsLink")
+      }
       Section("拍摄与控制") {
         NavigationLink {
           RemoteControlsView()

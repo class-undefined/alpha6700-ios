@@ -62,6 +62,78 @@ private struct DecodedPhoto {
 private actor PhotoDecodeWorker {
   static let shared = PhotoDecodeWorker()
   private let context = CIContext(options: [.cacheIntermediates: false])
+  func exportJPEG(_ sourceURL: URL, to destinationURL: URL) throws {
+    try Task.checkCancellation()
+    try autoreleasepool {
+      let raw = sourceURL.pathExtension.lowercased() == "arw"
+      let image: CIImage
+      if raw {
+        guard let filter = CIRAWFilter(imageURL: sourceURL) else {
+          throw CameraFailure(message: "系统不支持完整显影这份 RAW，请选择 RAW 或全部原文件")
+        }
+        filter.scaleFactor = 1
+        filter.isDraftModeEnabled = false
+        guard let output = filter.outputImage else {
+          throw CameraFailure(message: "RAW 显影失败，原文件已保留")
+        }
+        image = output
+      } else {
+        guard
+          let decoded = CIImage(contentsOf: sourceURL, options: [.applyOrientationProperty: true])
+        else { throw CameraFailure(message: "无法读取待转换影像") }
+        image = decoded
+      }
+      guard image.extent.width > 0, image.extent.height > 0, image.extent.width.isFinite,
+        image.extent.height.isFinite
+      else { throw CameraFailure(message: "影像尺寸无效") }
+      try Task.checkCancellation()
+      guard
+        let cg = context.createCGImage(
+          image, from: image.extent, format: .RGBA8,
+          colorSpace: CGColorSpace(name: CGColorSpace.sRGB))
+      else { throw CameraFailure(message: "无法生成全尺寸 JPEG") }
+      var metadata: [String: Any] = [
+        kCGImageDestinationLossyCompressionQuality as String: 0.95,
+        kCGImagePropertyOrientation as String: 1,
+      ]
+      if let source = CGImageSourceCreateWithURL(sourceURL as CFURL, nil),
+        let original = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [String: Any]
+      {
+        var exif = original[kCGImagePropertyExifDictionary as String] as? [String: Any] ?? [:]
+        exif[kCGImagePropertyExifPixelXDimension as String] = cg.width
+        exif[kCGImagePropertyExifPixelYDimension as String] = cg.height
+        exif[kCGImagePropertyExifColorSpace as String] = 1
+        exif.removeValue(forKey: kCGImagePropertyExifMakerNote as String)
+        metadata[kCGImagePropertyExifDictionary as String] = exif
+        metadata[kCGImagePropertyGPSDictionary as String] =
+          original[kCGImagePropertyGPSDictionary as String]
+        if let tiff = original[kCGImagePropertyTIFFDictionary as String] as? [String: Any] {
+          let keys = [
+            kCGImagePropertyTIFFMake, kCGImagePropertyTIFFModel, kCGImagePropertyTIFFDateTime,
+            kCGImagePropertyTIFFArtist, kCGImagePropertyTIFFCopyright,
+          ]
+          metadata[kCGImagePropertyTIFFDictionary as String] = tiff.filter { key, _ in
+            keys.contains { ($0 as String) == key }
+          }
+        }
+      }
+      let temporary = destinationURL.deletingLastPathComponent().appendingPathComponent(
+        ".jpeg-" + UUID().uuidString)
+      defer { try? FileManager.default.removeItem(at: temporary) }
+      guard
+        let output = CGImageDestinationCreateWithURL(
+          temporary as CFURL, "public.jpeg" as CFString, 1, nil)
+      else { throw CameraFailure(message: "无法创建 JPEG 文件") }
+      CGImageDestinationAddImage(output, cg, metadata as CFDictionary)
+      guard CGImageDestinationFinalize(output) else { throw CameraFailure(message: "JPEG 编码失败") }
+      try Task.checkCancellation()
+      if FileManager.default.fileExists(atPath: destinationURL.path) {
+        _ = try FileManager.default.replaceItemAt(destinationURL, withItemAt: temporary)
+      } else {
+        try FileManager.default.moveItem(at: temporary, to: destinationURL)
+      }
+    }
+  }
   func decode(_ url: URL, maxDimension: Int, raw: Bool) throws -> DecodedPhoto {
     try Task.checkCancellation()
     return try autoreleasepool {
@@ -100,6 +172,9 @@ private actor PhotoDecodeWorker {
   }
 }
 enum PhotoDecoder {
+  static func exportJPEG(_ source: URL, to destination: URL) async throws {
+    try await PhotoDecodeWorker.shared.exportJPEG(source, to: destination)
+  }
   static func decode(_ url: URL, maxDimension: Int) async throws -> UIImage {
     try await PhotoDecodeWorker.shared.decode(url, maxDimension: maxDimension, raw: false).image
   }
@@ -158,7 +233,7 @@ extension CameraModel {
       url = local
       quality = "原图"
     } else {
-      guard connected, !importing else { throw CameraFailure(message: "连接相机后载入清晰预览") }
+      guard connected, !importing, !exporting else { throw CameraFailure(message: "连接相机后载入清晰预览") }
       let preview: CameraPreview = try await bridge.call(
         "preview", ["id": item.id, "fileID": file.id, "quality": "screen"], priority: .preview)
       url = URL(fileURLWithPath: preview.path)

@@ -95,3 +95,48 @@ extension XCTestExpectation {
     XCTWaiter.wait(for: [self], timeout: timeout) == .completed
   }
 }
+
+extension SmokeTests {
+  @MainActor func testLongPressSelectionFormatsAndBatchExport() throws {
+    XCUIDevice.shared.orientation = .portrait
+    let app = XCUIApplication()
+    app.launchArguments = ["--ui-fixtures", "--reset-export-preferences"]
+    app.launch()
+    app.tabBars.buttons["素材"].tap()
+    let first = app.buttons["media-1"]
+    let second = app.buttons["media-2"]
+    XCTAssertTrue(first.waitForExistence(timeout: 8))
+    first.press(forDuration: 0.6)
+    XCTAssertFalse(
+      app.staticTexts["photoTitle"].exists, "Long press must select without opening a photo")
+    XCTAssertTrue(waitFor(app.staticTexts["mediaSelectionCount"], contains: "已选 1"))
+    second.tap()
+    XCTAssertTrue(waitFor(app.staticTexts["mediaSelectionCount"], contains: "已选 2"))
+    first.tap()
+    XCTAssertTrue(waitFor(app.staticTexts["mediaSelectionCount"], contains: "已选 1"))
+    first.tap()
+    save(app, "10-photo-selection")
+    app.buttons["selectionExportSettings"].tap()
+    app.descendants(matching: .any).matching(identifier: "exportFormat-raw").firstMatch.tap()
+    app.buttons["完成"].firstMatch.tap()
+    XCTAssertTrue(app.staticTexts["exportSkippedSummary"].exists)
+    XCTAssertFalse(
+      app.buttons["exportSelectedMedia"].isEnabled,
+      "JPEG-only photos cannot be silently exported as RAW")
+    app.buttons["selectionExportSettings"].tap()
+    app.descendants(matching: .any).matching(identifier: "exportFormat-jpeg").firstMatch.tap()
+    save(app, "11-export-settings")
+    app.buttons["完成"].firstMatch.tap()
+    XCTAssertTrue(app.buttons["exportSelectedMedia"].isEnabled)
+    app.buttons["exportSelectedMedia"].tap()
+    XCTAssertTrue(waitFor(app.staticTexts["batchExportSummary"], contains: "2/2"))
+    save(app, "12-batch-export")
+    app.terminate()
+    app.launchArguments = ["--ui-fixtures"]
+    app.launch()
+    app.tabBars.buttons["相机"].tap()
+    let settings = app.buttons["exportSettingsLink"]
+    XCTAssertTrue(settings.waitForExistence(timeout: 5))
+    XCTAssertTrue(settings.label.contains("JPEG"), "Export preference must survive relaunch")
+  }
+}
