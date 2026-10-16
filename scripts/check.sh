@@ -11,3 +11,5 @@ go test ./...
 cd "$TASK_ROOT"
 /usr/bin/python3 -m py_compile scripts/generate-project.py scripts/import-local-access.py scripts/profile-expiry.py
 bash -n scripts/build-core.sh scripts/install-device.sh
+
+"$TASK_ROOT/scripts/test-export-logic.sh"
