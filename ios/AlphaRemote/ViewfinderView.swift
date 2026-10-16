@@ -31,8 +31,10 @@ struct ViewfinderView: View {
               }.padding(10).glassEffect(.regular, in: .capsule).padding(12)
             }
             .overlay(alignment: .bottomTrailing) {
-              if let level = camera.snapshot?.liveMeta.Level, level.State != 0 {
-                Text("\(level.Z)°").font(.caption.monospacedDigit()).padding(8).glassEffect(
+              if let level = camera.snapshot?.liveMeta.Level, level.State == 2,
+                (-180...180).contains(level.X)
+              {
+                Text("\(level.X)°").font(.caption.monospacedDigit()).padding(8).glassEffect(
                   .regular, in: .capsule
                 ).padding(12)
               }

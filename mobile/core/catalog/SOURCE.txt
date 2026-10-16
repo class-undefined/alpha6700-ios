@@ -1,0 +1,3 @@
+Display names extracted from https://raw.githubusercontent.com/mikefsq/ptp/0fe3c68516f8c0fe89c963437bbc385d68620b25/sony/props_gen.go
+Copyright (c) 2026 mikefsq. MIT License; see LICENSE.
+No model support flags or write constraints are imported.

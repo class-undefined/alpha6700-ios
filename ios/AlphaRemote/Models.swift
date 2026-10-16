@@ -21,10 +21,30 @@ struct CameraProperty: Decodable, Identifiable, Hashable {
   var id: Int { code }
   var title: String { Self.names[code] ?? name }
   var groupTitle: String { Self.groups[group] ?? group }
-  var formatted: String {
-    if code == 0xD21E && value == "16777215" { return "AUTO" }
-    if code == 0x5007, let n = Double(value) { return String(format: "ƒ/%.1f", n / 100) }
-    return display.trimmingCharacters(in: .whitespaces)
+  var formatted: String { formattedValue(value, fallback: display) }
+  func formattedValue(_ raw: String, fallback: String) -> String {
+    if code == 0xD21E, let n = UInt32(raw) {
+      let iso = n & 0x00ff_ffff
+      let label = iso == 0x00ff_ffff ? "AUTO" : String(iso)
+      if n >> 24 == 0x10 { return label + " 扩展" }
+      return n >> 24 == 0 ? label : label + String(format: " · 0x%02X", n >> 24)
+    }
+    if code == 0x5007, let n = Int(raw) {
+      if n == 0 || n >= 65533 { return "ƒ/—" }
+      return String(format: "ƒ/%.1f", Double(n) / 100)
+    }
+    if code == 0xD20D, let n = UInt32(raw) {
+      if n == 0 { return "BULB" }
+      if n == UInt32.max { return "—" }
+      let numerator = n >> 16
+      let denominator = n & 0xffff
+      if denominator == 0 { return "—" }
+      if numerator >= denominator {
+        return String(format: "%g s", Double(numerator) / Double(denominator))
+      }
+      return "\(numerator)/\(denominator)"
+    }
+    return fallback.trimmingCharacters(in: .whitespaces)
   }
   static let groups = [
     "Exposure": "曝光", "Focus": "对焦", "Drive": "拍摄", "White balance": "白平衡", "Image": "影像",

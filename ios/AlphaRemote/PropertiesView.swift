@@ -89,7 +89,7 @@ struct PropertyEditor: View {
                   confirm = true
                 } label: {
                   HStack {
-                    Text(choice.label)
+                    Text(current.formattedValue(choice.value, fallback: choice.label))
                     Spacer()
                     if current.value == choice.value { Image(systemName: "checkmark") }
                   }
@@ -114,7 +114,9 @@ struct PropertyEditor: View {
         .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
     }.onAppear { value = current.value }.presentationDetents([.medium, .large])
       .confirmationDialog("设置\(current.title)", isPresented: $confirm, titleVisibility: .visible) {
-        Button("应用 \(value)") { Task { await camera.set(current, to: value) } }
+        Button("应用 \(current.formattedValue(value, fallback: value))") {
+          Task { await camera.set(current, to: value) }
+        }
       } message: {
         Text(current.caution.isEmpty ? "写入前会重新核对相机允许的范围。" : current.caution)
       }

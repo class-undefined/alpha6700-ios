@@ -174,3 +174,16 @@ func TestErrorsDoNotLeakCredentials(t *testing.T) {
 		t.Fatal(s)
 	}
 }
+
+func TestCatalogIsNamesOnlyAndDoesNotEnableWrites(t *testing.T) {
+	p := property(ptpip.SonyProp{Code: 0xD253, Type: 4, Writable: false, Enabled: 0, Current: ptpip.SonyValue{Int: 2}})
+	if p.Name == "0xD253" || p.Writable || len(p.Choices) != 0 {
+		t.Fatal("catalog must only name properties, never create permissions or choices", p)
+	}
+	if name, _, ok := catalogName(0xD21E); !ok || name == "" {
+		t.Fatal("missing exposure catalog")
+	}
+	if len(catalogNames) < 600 {
+		t.Fatal("incomplete name catalog")
+	}
+}

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -38,11 +39,13 @@ type Reply struct {
 	Error string `json:"error,omitempty"`
 }
 
+var privateURL = regexp.MustCompile(`(?i)https?://[^\s"<>]+`)
+
 func encodeReply(data any, err error, secrets ...string) string {
 	r := Reply{OK: err == nil, Data: data}
 	if err != nil {
 		r.Data = nil
-		r.Error = err.Error()
+		r.Error = privateURL.ReplaceAllString(err.Error(), "[camera URL redacted]")
 		for _, s := range secrets {
 			if s != "" {
 				r.Error = strings.ReplaceAll(r.Error, s, "[redacted]")
@@ -179,6 +182,26 @@ type Property struct {
 
 func property(p ptpip.SonyProp) Property {
 	info, ok := propdb.Lookup(p.Code)
+	switch p.Code {
+	case 0xD21E:
+		info.Name = "ISO"
+		info.Group = "Exposure"
+		info.Desc = "感光度。可选值来自相机；带模式标记的值保留机身原始编码。"
+		ok = true
+	case 0xD20D:
+		info.Name = "Shutter speed"
+		info.Group = "Exposure"
+		info.Desc = "快门速度，以秒或分数显示。"
+		ok = true
+	}
+	if !ok {
+		if name, group, found := catalogName(p.Code); found {
+			info.Name = name
+			info.Group = group
+			info.Desc = "相机报告的参数。可用范围会随机身模式改变。"
+			ok = true
+		}
+	}
 	if !ok {
 		info.Name = fmt.Sprintf("0x%04X", p.Code)
 		info.Group = "Undocumented"
