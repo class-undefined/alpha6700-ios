@@ -4,6 +4,13 @@ struct LibraryView: View {
   @Environment(CameraModel.self) private var camera
   @State private var selected: CameraMedia?
   @State private var mode = 0
+  @State private var query = ""
+  private var filtered: [CameraMedia] {
+    camera.media.filter {
+      query.isEmpty || $0.title.localizedCaseInsensitiveContains(query)
+        || $0.created.contains(query)
+    }
+  }
   var body: some View {
     VStack(spacing: 0) {
       Picker("素材位置", selection: $mode) {
@@ -11,6 +18,12 @@ struct LibraryView: View {
         Text("已导入 / 队列").tag(1)
       }.pickerStyle(.segmented).padding()
       if mode == 0 {
+        if !camera.media.isEmpty {
+          Text("\(camera.media.count) 组影像 · 当前显示 \(filtered.count) 组").font(.caption)
+            .foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).padding(
+              .horizontal
+            ).padding(.bottom, 8)
+        }
         if camera.media.isEmpty {
           ContentUnavailableView {
             Label("相机里的故事", systemImage: "photo.on.rectangle.angled")
@@ -28,7 +41,7 @@ struct LibraryView: View {
         } else {
           ScrollView {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 12)], spacing: 20) {
-              ForEach(camera.media) { item in
+              ForEach(filtered) { item in
                 Button {
                   selected = item
                 } label: {
@@ -91,7 +104,10 @@ struct LibraryView: View {
                   Button("暂停导入") { camera.pauseImport() }
                 } else {
                   Button("继续导入") {
-                    Task { await camera.importFile(t.selection.contentID, t.selection.file.ID, expectedKey: t.key) }
+                    Task {
+                      await camera.importFile(
+                        t.selection.contentID, t.selection.file.ID, expectedKey: t.key)
+                    }
                   }.disabled(!camera.ready)
                 }
               }
@@ -108,6 +124,7 @@ struct LibraryView: View {
         }.refreshable { await camera.refreshQueue() }
       }
     }.navigationTitle("素材")
+      .searchable(text: $query, prompt: "搜索文件名或拍摄日期")
       .toolbar {
         ToolbarItem(placement: .topBarTrailing) {
           if camera.busy {
