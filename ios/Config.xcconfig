@@ -1,0 +1,6 @@
+PRODUCT_BUNDLE_IDENTIFIER = com.classundefined.alpha6700
+IPHONEOS_DEPLOYMENT_TARGET = 26.0
+SWIFT_VERSION = 5.0
+CODE_SIGN_STYLE = Automatic
+// Local signing identity stays outside version control.
+#include? "Local.xcconfig"
