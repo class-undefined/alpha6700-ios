@@ -47,13 +47,15 @@ struct ViewfinderView: View {
               }
             }
             .overlay(alignment: .bottom) {
-              GlassEffectContainer(spacing: 6) {
-                HStack(spacing: 6) {
-                  quickSetting(0xD21E, label: "ISO", fallback: "—")
-                  quickSetting(0x5007, label: "光圈", fallback: "ƒ/—")
-                  quickSetting(0xD20D, label: "快门", fallback: "—")
-                  quickSetting(0x5010, label: "曝光", fallback: "±0")
-                }.padding(10)
+              if camera.connected {
+                GlassEffectContainer(spacing: 6) {
+                  HStack(spacing: 6) {
+                    quickSetting(0xD21E, label: "ISO", fallback: "—")
+                    quickSetting(0x5007, label: "光圈", fallback: "ƒ/—")
+                    quickSetting(0xD20D, label: "快门", fallback: "—")
+                    quickSetting(0x5010, label: "曝光", fallback: "±0")
+                  }.padding(10)
+                }
               }
             }
             .overlay(alignment: .trailing) {
