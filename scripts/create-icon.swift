@@ -1,22 +1,33 @@
-import AppKit
-let size=NSSize(width:1024,height:1024)
-let bitmap=NSBitmapImageRep(bitmapDataPlanes:nil,pixelsWide:1024,pixelsHigh:1024,bitsPerSample:8,samplesPerPixel:3,hasAlpha:false,isPlanar:false,colorSpaceName:.deviceRGB,bytesPerRow:0,bitsPerPixel:0)!
-NSGraphicsContext.saveGraphicsState()
-NSGraphicsContext.current=NSGraphicsContext(bitmapImageRep:bitmap)
-NSColor(calibratedRed:0.035,green:0.045,blue:0.052,alpha:1).setFill()
-NSBezierPath(rect:NSRect(origin:.zero,size:size)).fill()
-let center=NSPoint(x:512,y:512)
-let accent=NSColor(calibratedRed:0.91,green:0.66,blue:0.39,alpha:1)
-accent.setStroke()
-let ring=NSBezierPath(ovalIn:NSRect(x:190,y:190,width:644,height:644));ring.lineWidth=12;ring.stroke()
+import CoreGraphics
+import Foundation
+import ImageIO
+
+let edge = 1024
+let bitmap = CGContext(
+  data: nil, width: edge, height: edge, bitsPerComponent: 8, bytesPerRow: 0,
+  space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
+bitmap.setFillColor(CGColor(red: 0.035, green: 0.045, blue: 0.052, alpha: 1))
+bitmap.fill(CGRect(x: 0, y: 0, width: edge, height: edge))
+bitmap.setStrokeColor(CGColor(red: 0.91, green: 0.66, blue: 0.39, alpha: 1))
+bitmap.setLineWidth(12)
+bitmap.strokeEllipse(in: CGRect(x: 190, y: 190, width: 644, height: 644))
+bitmap.setLineWidth(24)
+bitmap.setLineCap(.round)
+bitmap.setLineJoin(.round)
 for i in 0..<6 {
- let a=Double(i)*Double.pi/3
- let b=a+Double.pi/3
- let p=NSBezierPath()
- p.move(to:NSPoint(x:center.x+300*cos(a),y:center.y+300*sin(a)))
- p.line(to:NSPoint(x:center.x+140*cos(a+0.3),y:center.y+140*sin(a+0.3)))
- p.line(to:NSPoint(x:center.x+300*cos(b),y:center.y+300*sin(b)))
- p.lineWidth=24;p.lineCapStyle = .round;p.lineJoinStyle = .round;p.stroke()
+  let a = Double(i) * .pi / 3
+  let b = a + .pi / 3
+  let x = 512 + 140 * cos(a)
+  let y = 512 + 140 * sin(a)
+  let nextX = 512 + 140 * cos(b)
+  let nextY = 512 + 140 * sin(b)
+  let length = (1 + sqrt(4 * pow(300.0 / 140, 2) - 3)) / 2
+  bitmap.beginPath()
+  bitmap.move(to: CGPoint(x: x, y: y))
+  bitmap.addLine(to: CGPoint(x: x + length * (nextX - x), y: y + length * (nextY - y)))
+  bitmap.strokePath()
 }
-NSGraphicsContext.restoreGraphicsState()
-try bitmap.representation(using:.png,properties:[:])!.write(to:URL(fileURLWithPath:CommandLine.arguments[1]))
+let url = URL(fileURLWithPath: CommandLine.arguments[1])
+let destination = CGImageDestinationCreateWithURL(url as CFURL, "public.png" as CFString, 1, nil)!
+CGImageDestinationAddImage(destination, bitmap.makeImage()!, nil)
+guard CGImageDestinationFinalize(destination) else { fatalError("Could not write the app icon") }
