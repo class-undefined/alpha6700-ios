@@ -271,3 +271,33 @@ func TestStreamingDigestSurvivesRestartAndLargerChunks(t *testing.T) {
 		t.Fatal("re-downloaded committed prefix")
 	}
 }
+
+func TestReexportRecreatesRemovedCompletedFile(t *testing.T) {
+	dir := t.TempDir()
+	payload := []byte("original camera data")
+	if e := os.WriteFile(filepath.Join(dir, "DSC003.JPG"), payload, 0600); e != nil {
+		t.Fatal(e)
+	}
+	s, _ := fakeEngine(t, dir)
+	if _, e := s.list(context.Background()); e != nil {
+		t.Fatal(e)
+	}
+	ct := s.contents[0]
+	first, e := s.transferChunk(context.Background(), ct.ID, ct.Files[0].ID, "")
+	if e != nil {
+		t.Fatal(e)
+	}
+	before := first.(Transfer)
+	if e = os.Remove(before.Path); e != nil {
+		t.Fatal(e)
+	}
+	result, e := s.transferChunk(context.Background(), ct.ID, ct.Files[0].ID, before.Key)
+	if e != nil {
+		t.Fatal(e)
+	}
+	after := result.(Transfer)
+	bytes, e := os.ReadFile(after.Path)
+	if e != nil || after.Status != "complete" || string(bytes) != string(payload) || after.SHA256 != before.SHA256 {
+		t.Fatal("reexport lost data", e)
+	}
+}

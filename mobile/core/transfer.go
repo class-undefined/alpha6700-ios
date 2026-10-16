@@ -215,10 +215,20 @@ func (s *Engine) transferChunk(ctx context.Context, id uint32, fileID uint16, ex
 		t.Path = filepath.Join(s.root, filepath.Base(t.Path))
 	}
 	if t.Status == "complete" {
-		if st, e := os.Stat(t.Path); e == nil && uint64(st.Size()) == t.Size {
+		st, statErr := os.Stat(t.Path)
+		if statErr == nil && uint64(st.Size()) == t.Size {
 			return t, nil
 		}
-		return nil, errors.New("Completed local file is missing or changed")
+		if !errors.Is(statErr, os.ErrNotExist) {
+			return nil, errors.New("Completed local file changed or is unreadable")
+		}
+		// An explicit new export may recreate a file removed in Files. Its
+		// camera identity was checked above; never overwrite an edited file.
+		t.Status, t.Offset, t.Path, t.SHA256 = "paused", 0, "", ""
+		s.transferHasher = nil
+		if e = atomicJSON(manifest, t); e != nil {
+			return nil, e
+		}
 	}
 	if t.Offset > t.Size {
 		return nil, errors.New("Saved offset exceeds expected size")
