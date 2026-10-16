@@ -100,7 +100,8 @@ struct CameraSettingsView: View {
         }
       }
       Section("本机") {
-        LabeledContent("版本", value: "0.1.0")
+        LabeledContent(
+          "版本", value: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—")
         LabeledContent("运行方式", value: "iPhone 直接连接相机")
         NavigationLink("安装与 7 天续签") { InstallHelpView() }
         NavigationLink("开源许可") { LicenseView() }

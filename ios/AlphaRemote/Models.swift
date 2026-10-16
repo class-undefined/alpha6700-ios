@@ -23,6 +23,24 @@ struct CameraProperty: Decodable, Identifiable, Hashable {
   var groupTitle: String { Self.groups[group] ?? group }
   var formatted: String { formattedValue(value, fallback: display) }
   func formattedValue(_ raw: String, fallback: String) -> String {
+    if let n = Int(raw) {
+      if code == 0x500A,
+        let label = [1: "MF", 2: "AF-S", 0x8004: "AF-C", 0x8005: "AF-A", 0x8006: "DMF"][n]
+      {
+        return label
+      }
+      if code == 0x5005,
+        let label = [
+          2: "AWB", 4: "日光", 6: "钨丝灯", 7: "闪光灯", 0x8010: "阴天", 0x8011: "阴影", 0x8012: "色温",
+          0x8020: "自定义 1", 0x8021: "自定义 2", 0x8022: "自定义 3",
+        ][n]
+      {
+        return label
+      }
+      if code == 0x500E, let label = [1: "M", 2: "P", 3: "A", 4: "S"][n] { return label }
+      if code == 0x5010 { return String(format: "%+.1f EV", Double(n) / 1000) }
+      if code == 0xD20F { return "\(n) K" }
+    }
     if code == 0xD21E, let n = UInt32(raw) {
       let iso = n & 0x00ff_ffff
       let label = iso == 0x00ff_ffff ? "AUTO" : String(iso)
@@ -52,7 +70,8 @@ struct CameraProperty: Decodable, Identifiable, Hashable {
     "Undocumented": "其他参数",
   ]
   static let names = [
-    0x5001: "电量", 0x5007: "光圈", 0x500A: "对焦模式", 0x500E: "曝光模式", 0x5010: "曝光补偿", 0xD21E: "ISO",
+    0x5001: "电量", 0x5005: "白平衡", 0xD218: "电量", 0xD22C: "对焦区域", 0xD23F: "图片配置", 0x5013: "拍摄模式",
+    0x5007: "光圈", 0x500A: "对焦模式", 0x500E: "曝光模式", 0x5010: "曝光补偿", 0xD21E: "ISO",
     0xD20D: "快门速度", 0xD20F: "色温", 0xD222: "照片保存位置", 0xD268: "回传尺寸", 0xD215: "待回传照片", 0xD208: "可用按键",
     0xD20A: "可用拨轮", 0xD278: "取景流", 0xD207: "相机屏幕叠层",
   ]
@@ -86,6 +105,7 @@ struct CameraSnapshot: Decodable {
   let liveError: String
 }
 struct MediaFile: Decodable, Identifiable, Hashable {
+  var key: String? = nil
   let id: Int
   let name: String
   let size: Int64

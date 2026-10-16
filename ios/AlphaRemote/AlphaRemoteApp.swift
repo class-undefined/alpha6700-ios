@@ -28,6 +28,10 @@ struct RootView: View {
       }
       Tab("相机", systemImage: "camera", value: 3) { NavigationStack { CameraSettingsView() } }
     }
+    .onChange(of: camera.selectedTab) { _, _ in Task { await camera.tabChanged() } }
+    .onReceive(
+      NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)
+    ) { _ in camera.clearPhotoMemory() }
     .sheet(isPresented: $camera.showConnection) { ConnectionView() }
     .sheet(isPresented: $camera.showDiagnostics) {
       NavigationStack {

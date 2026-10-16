@@ -18,7 +18,17 @@ import SwiftUI
   var live = false
   var media: [CameraMedia] = []
   var transfers: [CameraTransfer] = []
-  var thumbnails: [Int: UIImage] = [:]
+  let images = PhotoImageStore()
+  var isFixture = false
+  var transferRate: Double = 0
+  var transferElapsed: Double = 0
+  var importContentID: Int?
+  var importFileID: Int?
+  var transferChunkMiB = 8
+  var preferLive = true
+  var dialRunning = false
+  private var dialTask: Task<Void, Never>?
+  private var dialPending: (Int, String)?
   var importing = false
   var importedFile: URL?
   var diagnostics = ""
@@ -26,7 +36,7 @@ import SwiftUI
   var selectedTab = 0
   private var monitor: Task<Void, Never>?
   private var video: Task<Void, Never>?
-  private var sessionID = UUID()
+  var sessionID = UUID()
   private var disconnection: Task<Void, Never>?
   private var changingLive = false
   private var reconnectOnForeground = false
@@ -41,10 +51,21 @@ import SwiftUI
     access = KeychainStore.load() ?? CameraAccess()
   }
   func initialize() async {
+    #if DEBUG
+      if ProcessInfo.processInfo.arguments.contains("--ui-fixtures") {
+        loadFixtures()
+        return
+      }
+    #endif
     await refreshQueue()
     #if DEBUG
-      if ProcessInfo.processInfo.arguments.contains("--connect") && access.complete {
+      if (ProcessInfo.processInfo.arguments.contains("--connect")
+        || ProcessInfo.processInfo.arguments.contains("--benchmark-transfers")) && access.complete
+      {
         await connect()
+        if ProcessInfo.processInfo.arguments.contains("--benchmark-transfers") {
+          await measureTransferSpeed()
+        }
       }
     #endif
   }
@@ -79,7 +100,7 @@ import SwiftUI
       showConnection = false
       message = "\(result.model) · 固件 \(result.firmware)"
       startMonitor()
-      await startLive()
+      if selectedTab == 0 && preferLive { await startLive() }
     } catch {
       guard token == sessionID else { return }
       bridge.abort()
@@ -93,6 +114,10 @@ import SwiftUI
     if !preserveImport { resumeImport = nil }
     changingLive = false
     sessionID = UUID()
+    dialTask?.cancel()
+    dialTask = nil
+    dialPending = nil
+    dialRunning = false
     monitor?.cancel()
     video?.cancel()
     paused = true
@@ -109,6 +134,7 @@ import SwiftUI
     disconnection = Task { [bridge] in let _: Bool? = try? await bridge.call("disconnect") }
   }
   func sceneChanged(_ phase: ScenePhase) {
+    if isFixture { return }
     if phase == .background {
       reconnectOnForeground = connected || connecting
       disconnect(preserveImport: true)
@@ -123,13 +149,17 @@ import SwiftUI
     }
   }
   func startLive() async {
-    guard connected, !changingLive else { return }
+    guard connected, !changingLive, selectedTab == 0, !importing else { return }
     let token = sessionID
     changingLive = true
     defer { if token == sessionID { changingLive = false } }
     do {
       let _: Bool = try await bridge.call("liveStart")
       guard connected, token == sessionID else { return }
+      if selectedTab != 0 || importing {
+        let _: Bool? = try? await bridge.call("liveStop")
+        return
+      }
       live = true
       video?.cancel()
       video = Task { [weak self] in
@@ -200,6 +230,12 @@ import SwiftUI
     }
   }
   func set(_ property: CameraProperty, to value: String) async {
+    #if DEBUG
+      if isFixture {
+        setFixture(property, value: value)
+        return
+      }
+    #endif
     guard ready else { return }
     busy = true
     let token = sessionID
@@ -213,6 +249,7 @@ import SwiftUI
     } catch { if token == sessionID { self.error = error.localizedDescription } }
   }
   func loadMedia() async {
+    if isFixture { return }
     guard ready else { return }
     busy = true
     let token = sessionID
@@ -222,22 +259,31 @@ import SwiftUI
       guard token == sessionID else { return }
       media = result
       message = "已读取 \(media.count) 组影像"
-      thumbnails.removeAll()
+      images.clear()
     } catch { if token == sessionID { self.error = error.localizedDescription } }
   }
   func thumbnail(_ item: CameraMedia) async {
-    guard connected, !importing, thumbnails[item.id] == nil, !thumbnailRequests.contains(item.id),
-      let file = item.files.first
+    guard connected, !importing, images.thumbnail(item.cacheKey) == nil,
+      !thumbnailRequests.contains(item.id), let file = item.previewFile
     else { return }
     thumbnailRequests.insert(item.id)
     defer { thumbnailRequests.remove(item.id) }
+    let token = sessionID
     do {
-      let b64: String = try await bridge.call("thumbnail", ["id": item.id, "fileID": file.id])
-      if let d = Data(base64Encoded: b64), let img = UIImage(data: d) {
-        if thumbnails.count > 120 { thumbnails.removeAll() }
-        thumbnails[item.id] = img
-      }
-    } catch { /* Per-item failure leaves an explicit file-type placeholder. */  }
+      #if DEBUG
+        if isFixture {
+          let photo = try await fixturePhoto(item, thumbnail: true)
+          images.putThumbnail(photo.image, key: item.cacheKey)
+          return
+        }
+      #endif
+      let p: CameraPreview = try await bridge.call(
+        "preview", ["id": item.id, "fileID": file.id, "quality": "thumbnail"], priority: .thumbnail)
+      try Task.checkCancellation()
+      let image = try await PhotoDecoder.decode(URL(fileURLWithPath: p.path), maxDimension: 360)
+      try Task.checkCancellation()
+      if token == sessionID { images.putThumbnail(image, key: item.cacheKey) }
+    } catch { /* A cell keeps its explicit file-type placeholder; paging offers retry. */  }
   }
   func refreshQueue() async {
     do { transfers = try await bridge.call("queue") } catch {
@@ -245,13 +291,32 @@ import SwiftUI
     }
   }
   func importFile(_ id: Int, _ fileID: Int, expectedKey: String? = nil) async {
+    #if DEBUG
+      if isFixture {
+        importFixture(id, fileID)
+        return
+      }
+    #endif
     guard ready, !importing else { return }
+    let token = sessionID
+    let initialOffset =
+      transfers.first { t in
+        expectedKey != nil
+          ? t.key == expectedKey : t.selection.contentID == id && t.selection.file.ID == fileID
+      }?.offset ?? 0
     importing = true
     busy = true
+    importContentID = id
+    importFileID = fileID
+    transferRate = 0
+    transferElapsed = 0
+    let started = Date()
+    bridge.cancelPendingPreviews()
+    await stopLive()
+    guard token == sessionID else { return }
     paused = false
     resumeImport = (id, fileID, expectedKey)
     var currentKey = expectedKey
-    let token = sessionID
     defer {
       if token == sessionID {
         importing = false
@@ -261,8 +326,12 @@ import SwiftUI
     do {
       while !paused && token == sessionID {
         let t: CameraTransfer = try await bridge.call(
-          "transfer", ["id": id, "fileID": fileID, "name": currentKey ?? ""])
+          "transfer",
+          ["id": id, "fileID": fileID, "name": currentKey ?? "", "chunkMiB": transferChunkMiB],
+          priority: .transfer)
         guard token == sessionID else { return }
+        transferElapsed = Date().timeIntervalSince(started)
+        transferRate = Double(max(0, t.offset - initialOffset)) / max(transferElapsed, 0.001)
         currentKey = t.key
         resumeImport = (id, fileID, currentKey)
         if let i = transfers.firstIndex(where: { $0.id == t.id }) {
@@ -286,6 +355,11 @@ import SwiftUI
       }
     }
     await refreshQueue()
+    if token == sessionID {
+      importing = false
+      busy = false
+      if selectedTab == 0 && preferLive { await startLive() }
+    }
   }
   func pauseImport() {
     paused = true
@@ -383,5 +457,62 @@ import SwiftUI
       }
       message = "已保存到系统照片"
     } catch { self.error = "照片图库无法导入此格式，原文件仍保存在 App 的 Imports 文件夹。\n" + error.localizedDescription }
+  }
+}
+
+extension CameraModel {
+  func tabChanged() async {
+    if isFixture {
+      live = selectedTab == 0
+      return
+    }
+    if selectedTab != 0 {
+      bridge.cancelPendingPreviews()
+      await stopLive()
+    } else if preferLive && connected && !importing {
+      await startLive()
+    }
+  }
+  var transferSpeedLabel: String {
+    guard transferRate > 0 else { return "正在连接存储卡…" }
+    return String(format: "%.1f MB/s", transferRate / 1_000_000)
+  }
+}
+
+extension CameraModel {
+  // Coalesce detents while a write is in flight. Each write still revalidates
+  // capability and reads back; intermediate gestures are never queued as commands.
+  func scheduleDial(code: Int, value: String) {
+    guard connected, !importing, properties.first(where: { $0.code == code })?.writable == true
+    else { return }
+    dialPending = (code, value)
+    guard dialTask == nil else { return }
+    dialRunning = true
+    let token = sessionID
+    dialTask = Task { [weak self] in
+      guard let self else { return }
+      defer {
+        if token == sessionID {
+          dialTask = nil
+          dialRunning = false
+        }
+      }
+      while !Task.isCancelled, token == sessionID, let pending = dialPending {
+        if !ready {
+          try? await Task.sleep(for: .milliseconds(60))
+          continue
+        }
+        dialPending = nil
+        guard let p = properties.first(where: { $0.code == pending.0 }), p.writable else {
+          continue
+        }
+        if p.value == pending.1 { continue }
+        await set(p, to: pending.1)
+        if error != nil {
+          dialPending = nil
+          break
+        }
+      }
+    }
   }
 }

@@ -2,7 +2,7 @@ import SwiftUI
 
 struct LibraryView: View {
   @Environment(CameraModel.self) private var camera
-  @State private var selected: CameraMedia?
+  @State private var selected: PhotoBrowserSelection?
   @State private var mode = 0
   @State private var query = ""
   private var filtered: [CameraMedia] {
@@ -40,33 +40,37 @@ struct LibraryView: View {
           }
         } else {
           ScrollView {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 12)], spacing: 20) {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 108), spacing: 2)], spacing: 2) {
               ForEach(filtered) { item in
                 Button {
-                  selected = item
+                  selected = PhotoBrowserSelection(id: item.id, items: filtered)
                 } label: {
-                  VStack(alignment: .leading, spacing: 8) {
-                    ZStack {
-                      RoundedRectangle(cornerRadius: 16).fill(.white.opacity(0.06))
-                      if let image = camera.thumbnails[item.id] {
-                        Image(uiImage: image).resizable().scaledToFit()
-                      } else {
-                        Image(systemName: item.files.first?.video == true ? "video" : "photo").font(
-                          .title
-                        ).foregroundStyle(.secondary)
+                  ZStack(alignment: .bottomTrailing) {
+                    Color.white.opacity(0.07)
+                    if let image = camera.thumbnailImage(item) {
+                      GeometryReader { g in
+                        Image(uiImage: image).resizable().scaledToFill().frame(
+                          width: g.size.width, height: g.size.height
+                        ).clipped()
                       }
-                    }.aspectRatio(3 / 2, contentMode: .fit).clipShape(.rect(cornerRadius: 16))
-                    Text(item.title).font(.caption.weight(.medium)).lineLimit(1)
-                    HStack {
-                      Text("\(item.files.count) 个文件")
-                      if item.protected { Image(systemName: "lock.fill") }
-                      Spacer()
-                      Text(item.files.first?.sizeLabel ?? "")
-                    }.font(.system(size: 10)).foregroundStyle(.secondary)
-                  }
-                }.buttonStyle(.plain).task { await camera.thumbnail(item) }
+                    } else {
+                      Image(systemName: item.previewFile?.video == true ? "video" : "photo")
+                        .foregroundStyle(.secondary).frame(
+                          maxWidth: .infinity, maxHeight: .infinity)
+                    }
+                    if item.previewFile?.video == true {
+                      Image(systemName: "video.fill").font(.caption2).padding(6).shadow(radius: 2)
+                    }
+                    if item.protected {
+                      Image(systemName: "lock.fill").font(.caption2).padding(6).shadow(radius: 2)
+                    }
+                  }.aspectRatio(1, contentMode: .fit).clipped().accessibilityLabel(item.title)
+                    .accessibilityIdentifier("media-\(item.id)")
+                }.buttonStyle(.plain).accessibilityIdentifier("media-\(item.id)").task {
+                  await camera.thumbnail(item)
+                }
               }
-            }.padding()
+            }.padding(.horizontal, 2)
           }.refreshable { await camera.loadMedia() }
         }
       } else {
@@ -84,6 +88,10 @@ struct LibraryView: View {
                     .foregroundStyle(Theme.accent)
                   Text(t.name).font(.subheadline)
                   Spacer()
+                }
+                if camera.importing && camera.importContentID == t.selection.contentID {
+                  Text(camera.transferSpeedLabel).font(.caption.monospacedDigit()).foregroundStyle(
+                    Theme.accent)
                 }
                 ProgressView(value: t.progress).tint(Theme.accent)
                 Text(t.complete ? "已导入 · SHA256 已计算" : "\(Int(t.progress*100))% · 可继续导入").font(
@@ -140,75 +148,6 @@ struct LibraryView: View {
           }
         }
       }
-      .sheet(item: $selected) { MediaDetail(item: $0) }
-  }
-}
-struct MediaDetail: View {
-  @Environment(CameraModel.self) private var camera
-  @Environment(\.dismiss) private var dismiss
-  let item: CameraMedia
-  @State private var confirmDelete = false
-  var body: some View {
-    NavigationStack {
-      List {
-        Section {
-          if let image = camera.thumbnails[item.id] {
-            Image(uiImage: image).resizable().scaledToFit().frame(maxWidth: .infinity)
-          }
-          LabeledContent("拍摄时间", value: item.created)
-          LabeledContent("评级", value: "\(item.rating) ★")
-          if item.protected { Label("相机已保护此影像", systemImage: "lock") }
-        }
-        Section("原文件") {
-          ForEach(item.files) { file in
-            VStack(alignment: .leading, spacing: 12) {
-              HStack {
-                Text(file.name).font(.subheadline)
-                Spacer()
-                Text(file.sizeLabel).font(.caption).foregroundStyle(.secondary)
-              }
-              Button {
-                Task { await camera.importFile(item.id, file.id) }
-              } label: {
-                Label("导入 iPhone", systemImage: "arrow.down.circle")
-              }.buttonStyle(.glass).disabled(!camera.ready)
-            }
-          }
-        }
-        if camera.importing {
-          Section {
-            ProgressView()
-            Text(camera.message).font(.footnote)
-            Button("暂停导入") { camera.pauseImport() }
-          }
-        }
-        if let url = camera.importedFile {
-          Section { ShareLink(item: url) { Label("分享最近导入文件", systemImage: "square.and.arrow.up") } }
-        }
-        Section {
-          Button("从相机删除这一组影像", role: .destructive) { confirmDelete = true }.disabled(
-            !camera.ready || item.protected)
-        } footer: {
-          Text("同一组中的 JPEG、RAW 和视频文件会一起删除。")
-        }
-      }.navigationTitle(item.title).navigationBarTitleDisplayMode(.inline).toolbar {
-        ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } }
-      }
-    }.confirmationDialog(
-      "永久删除 \(item.title) 及关联文件？", isPresented: $confirmDelete, titleVisibility: .visible
-    ) {
-      Button("删除相机原文件", role: .destructive) {
-        Task {
-          await camera.perform(
-            "delete",
-            values: ["id": item.id, "fileID": item.files.first?.id ?? 0, "confirm": true],
-            success: "相机已确认删除")
-          await camera.loadMedia()
-          if camera.error == nil { dismiss() }
-        }
-      }
-    } message: {
-      Text("此操作无法撤销。已导入 iPhone 的副本会保留。")
-    }
+      .fullScreenCover(item: $selected) { PhotoBrowser(selection: $0) }
   }
 }
