@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"hash"
 	"io"
 	"os"
 	"path/filepath"
@@ -46,6 +47,7 @@ type Transfer struct {
 	SHA256    string    `json:"sha256,omitempty"`
 }
 type MediaFile struct {
+	Key   string `json:"key"`
 	ID    uint16 `json:"id"`
 	Name  string `json:"name"`
 	Size  uint64 `json:"size"`
@@ -70,7 +72,7 @@ func (s *Engine) list(ctx context.Context) (any, error) {
 	for _, c := range cs {
 		m := Media{ID: c.ID, Created: c.CreatedLocal.Format("2006-01-02 15:04:05"), Rating: c.Rating, Protected: c.Protected, Files: []MediaFile{}}
 		for _, f := range c.Files {
-			m.Files = append(m.Files, MediaFile{f.ID, filepath.Base(f.Path), f.Size, f.HasVideo})
+			m.Files = append(m.Files, MediaFile{transferKey(Selection{Camera: s.info.Model + ":" + s.info.SerialNumber, ContentID: c.ID, Created: c.CreatedUTC.Format(time.RFC3339Nano), File: f}), f.ID, filepath.Base(f.Path), f.Size, f.HasVideo})
 		}
 		out = append(out, m)
 	}
@@ -148,14 +150,18 @@ func (w *cappedWriter) Write(p []byte) (int, error) {
 	w.remaining -= int64(n)
 	return n, e
 }
-func commitChunk(ctx context.Context, c chunkSource, sel Selection, f *os.File, offset uint64, want uint32) (uint64, error) {
+func commitChunk(ctx context.Context, c chunkSource, sel Selection, f *os.File, offset uint64, want uint32, digest ...io.Writer) (uint64, error) {
 	if offset > sel.File.Size || uint64(want) > sel.File.Size-offset || want == 0 {
 		return offset, errors.New("Invalid download range")
 	}
 	if _, e := f.Seek(int64(offset), io.SeekStart); e != nil {
 		return offset, e
 	}
-	w := &cappedWriter{w: f, remaining: int64(want)}
+	var writer io.Writer = f
+	if len(digest) > 0 {
+		writer = io.MultiWriter(f, digest[0])
+	}
+	w := &cappedWriter{w: writer, remaining: int64(want)}
 	n, e := c.SonyGetContentsData(ctx, 1, sel.ContentID, sel.File.ID, offset, want, offset+uint64(want) == sel.File.Size, w)
 	if e == nil && (n == 0 || n > want || int64(n) != w.n) {
 		e = errors.New("Camera acknowledged an invalid byte count")
@@ -168,7 +174,14 @@ func commitChunk(ctx context.Context, c chunkSource, sel Selection, f *os.File, 
 	}
 	return offset + uint64(n), nil
 }
-func (s *Engine) transferChunk(ctx context.Context, id uint32, fileID uint16, expectedKey string) (any, error) {
+func (s *Engine) transferChunk(ctx context.Context, id uint32, fileID uint16, expectedKey string, chunkMiB ...int) (any, error) {
+	chunk := 8
+	if len(chunkMiB) > 0 && chunkMiB[0] != 0 {
+		chunk = chunkMiB[0]
+	}
+	if chunk != 2 && chunk != 4 && chunk != 8 && chunk != 16 {
+		return nil, errors.New("Transfer chunk must be 2, 4, 8 or 16 MiB")
+	}
 	if !s.listed {
 		if _, e := s.list(ctx); e != nil {
 			return nil, e
@@ -210,8 +223,10 @@ func (s *Engine) transferChunk(ctx context.Context, id uint32, fileID uint16, ex
 	if t.Offset > t.Size {
 		return nil, errors.New("Saved offset exceeds expected size")
 	}
-	if e = atomicJSON(manifest, t); e != nil {
-		return nil, e
+	if _, e = os.Stat(manifest); errors.Is(e, os.ErrNotExist) {
+		if e = atomicJSON(manifest, t); e != nil {
+			return nil, e
+		}
 	}
 	f, e := os.OpenFile(part, os.O_CREATE|os.O_RDWR, 0600)
 	if e != nil {
@@ -229,25 +244,30 @@ func (s *Engine) transferChunk(ctx context.Context, id uint32, fileID uint16, ex
 	if e = f.Truncate(int64(t.Offset)); e != nil {
 		return nil, e
 	}
+	if s.transferHasher == nil || s.transferHasher.key != key || s.transferHasher.offset != t.Offset {
+		h := sha256.New()
+		if _, e = f.Seek(0, io.SeekStart); e != nil {
+			return nil, e
+		}
+		if _, e = io.Copy(h, contextReader{ctx, io.LimitReader(f, int64(t.Offset))}); e != nil {
+			return nil, e
+		}
+		s.transferHasher = &transferDigest{key: key, offset: t.Offset, h: h}
+	}
 	if t.Offset < t.Size {
-		next, e := commitChunk(ctx, s.client, sel, f, t.Offset, uint32(min(uint64(2<<20), t.Size-t.Offset)))
+		next, e := commitChunk(ctx, s.client, sel, f, t.Offset, uint32(min(uint64(chunk)<<20, t.Size-t.Offset)), s.transferHasher.h)
 		if e != nil {
+			s.transferHasher = nil
 			return nil, e
 		}
 		t.Offset = next
+		s.transferHasher.offset = next
 		if e = atomicJSON(manifest, t); e != nil {
 			return nil, e
 		}
 	}
 	if t.Offset == t.Size {
-		if _, e = f.Seek(0, io.SeekStart); e != nil {
-			return nil, e
-		}
-		h := sha256.New()
-		if _, e = io.Copy(h, f); e != nil {
-			return nil, e
-		}
-		t.SHA256 = hex.EncodeToString(h.Sum(nil))
+		t.SHA256 = hex.EncodeToString(s.transferHasher.h.Sum(nil))
 		t.Path = filepath.Join(s.root, key+"-"+t.Name)
 		// Copying the final name by hard link keeps .part available if the process
 		// dies before the completed manifest has been atomically committed.
@@ -259,6 +279,7 @@ func (s *Engine) transferChunk(ctx context.Context, id uint32, fileID uint16, ex
 			return nil, e
 		}
 		_ = os.Remove(part)
+		s.transferHasher = nil
 	}
 	return t, nil
 }
@@ -342,4 +363,56 @@ func (s *Engine) fetchCapture(ctx context.Context) (any, error) {
 	}
 	path += ext
 	return path, os.Rename(strings.TrimSuffix(path, ext)+".partial", path)
+}
+
+// Only a single digest is retained; a failed chunk invalidates it. Resuming
+// after a restart hashes the committed prefix once, never the whole file again.
+type transferDigest struct {
+	key    string
+	offset uint64
+	h      hash.Hash
+}
+
+type TransferBenchmark struct {
+	ChunkMiB     int     `json:"chunkMiB"`
+	Bytes        uint64  `json:"bytes"`
+	Seconds      float64 `json:"seconds"`
+	MiBPerSecond float64 `json:"mibPerSecond"`
+	SHA256       string  `json:"sha256"`
+}
+
+func (s *Engine) benchmarkTransfer(ctx context.Context, id uint32, fileID uint16, chunkMiB int) (any, error) {
+	s.stopLive()
+	if !s.listed {
+		if _, e := s.list(ctx); e != nil {
+			return nil, e
+		}
+	}
+	sel, e := s.selection(id, fileID)
+	if e != nil {
+		return nil, e
+	}
+	if sel.File.Size > 128<<20 || sel.File.Size == 0 {
+		return nil, errors.New("Choose a file of at most 128 MiB for the bounded speed test")
+	}
+	dir, e := os.MkdirTemp(s.root, ".speed-test-")
+	if e != nil {
+		return nil, e
+	}
+	defer os.RemoveAll(dir)
+	trial := &Engine{root: dir, client: s.client, info: s.info, contents: s.contents, listed: true}
+	start := time.Now()
+	var result Transfer
+	for {
+		v, e := trial.transferChunk(ctx, id, fileID, "", chunkMiB)
+		if e != nil {
+			return nil, e
+		}
+		result = v.(Transfer)
+		if result.Status == "complete" {
+			break
+		}
+	}
+	seconds := time.Since(start).Seconds()
+	return TransferBenchmark{chunkMiB, result.Size, seconds, float64(result.Size) / (1 << 20) / seconds, result.SHA256}, nil
 }

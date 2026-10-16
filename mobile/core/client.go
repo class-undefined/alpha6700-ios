@@ -18,25 +18,26 @@ import (
 )
 
 type Engine struct {
-	op         sync.Mutex
-	mu         sync.Mutex
-	client     *ptpip.Client
-	tunnel     *ptpip.SSHDialer
-	cancel     context.CancelFunc
-	liveCancel context.CancelFunc
-	frame      []byte
-	frameAt    time.Time
-	frameMeta  ptpip.SonyLiveViewInfo
-	liveError  string
-	events     []ptpip.Event
-	liveWG     sync.WaitGroup
-	guid       [16]byte
-	root       string
-	access     Access
-	info       *ptpip.DeviceInfo
-	ext        *ptpip.SonyExtInfo
-	contents   []ptpip.SonyContent
-	listed     bool
+	transferHasher *transferDigest
+	op             sync.Mutex
+	mu             sync.Mutex
+	client         *ptpip.Client
+	tunnel         *ptpip.SSHDialer
+	cancel         context.CancelFunc
+	liveCancel     context.CancelFunc
+	frame          []byte
+	frameAt        time.Time
+	frameMeta      ptpip.SonyLiveViewInfo
+	liveError      string
+	events         []ptpip.Event
+	liveWG         sync.WaitGroup
+	guid           [16]byte
+	root           string
+	access         Access
+	info           *ptpip.DeviceInfo
+	ext            *ptpip.SonyExtInfo
+	contents       []ptpip.SonyContent
+	listed         bool
 }
 
 func New(root, guid string) (*Engine, error) {
@@ -419,13 +420,17 @@ func (s *Engine) dispatch(ctx context.Context, r Request) (any, error) {
 		return true, s.client.SonyTurnDial(ctx, r.Code, r.Steps)
 	case "list":
 		return s.list(ctx)
+	case "preview":
+		return s.preview(ctx, r.ID, r.FileID, r.Quality)
+	case "benchmarkTransfer":
+		return s.benchmarkTransfer(ctx, r.ID, r.FileID, r.ChunkMiB)
 	case "thumbnail":
 		var b boundedBuffer
 		b.limit = 8 << 20
 		_, e := s.client.SonyGetContentsCompressed(ctx, 1, r.ID, r.FileID, ptpip.SonyThumbnail, &b)
 		return b.Bytes(), e
 	case "transfer":
-		return s.transferChunk(ctx, r.ID, r.FileID, r.Name)
+		return s.transferChunk(ctx, r.ID, r.FileID, r.Name, r.ChunkMiB)
 	case "fetchCapture":
 		return s.fetchCapture(ctx)
 	case "delete":

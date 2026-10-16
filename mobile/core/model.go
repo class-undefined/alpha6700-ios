@@ -19,20 +19,22 @@ import (
 
 type Access struct{ Host, User, Password, Fingerprint string }
 type Request struct {
-	Op      string          `json:"op"`
-	Access  Access          `json:"access"`
-	Code    uint16          `json:"code"`
-	Value   json.RawMessage `json:"value"`
-	ID      uint32          `json:"id"`
-	FileID  uint16          `json:"fileID"`
-	X, Y    int
-	Steps   int16  `json:"steps"`
-	Enabled bool   `json:"enabled"`
-	Confirm bool   `json:"confirm"`
-	Path    string `json:"path"`
-	Name    string `json:"name"`
-	Slot    uint16 `json:"slot"`
-	Offset  int    `json:"offset"`
+	Quality  string          `json:"quality"`
+	ChunkMiB int             `json:"chunkMiB"`
+	Op       string          `json:"op"`
+	Access   Access          `json:"access"`
+	Code     uint16          `json:"code"`
+	Value    json.RawMessage `json:"value"`
+	ID       uint32          `json:"id"`
+	FileID   uint16          `json:"fileID"`
+	X, Y     int
+	Steps    int16  `json:"steps"`
+	Enabled  bool   `json:"enabled"`
+	Confirm  bool   `json:"confirm"`
+	Path     string `json:"path"`
+	Name     string `json:"name"`
+	Slot     uint16 `json:"slot"`
+	Offset   int    `json:"offset"`
 }
 type Reply struct {
 	OK    bool   `json:"ok"`

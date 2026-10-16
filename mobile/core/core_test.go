@@ -2,6 +2,8 @@ package core
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"github.com/knallli/alpha2go/ptpip"
@@ -198,5 +200,74 @@ func TestPTPStringUTF16LengthAndURLRedaction(t *testing.T) {
 	reply := encodeReply(nil, errors.New("GET http://localhost/live?token=private-value failed"))
 	if strings.Contains(reply, "private-value") {
 		t.Fatal("stream token leaked")
+	}
+}
+
+func TestScreenPreviewCacheIsDistinctAndIdentityScoped(t *testing.T) {
+	dir := t.TempDir()
+	if e := os.WriteFile(filepath.Join(dir, "DSC001.JPG"), []byte("photo"), 0600); e != nil {
+		t.Fatal(e)
+	}
+	s, server := fakeEngine(t, dir)
+	if _, e := s.list(context.Background()); e != nil {
+		t.Fatal(e)
+	}
+	ct := s.contents[0]
+	id := ct.Files[0].ID
+	first, e := s.preview(context.Background(), ct.ID, id, "screen")
+	if e != nil {
+		t.Fatal(e)
+	}
+	screen := first.(Preview)
+	bytes, e := os.ReadFile(screen.Path)
+	if e != nil || !strings.Contains(string(bytes), string(ptpiptest.CompressedData(ptpip.SonyScreennail))) {
+		t.Fatal("not a screen preview", e)
+	}
+	ops := server.Ops.Load()
+	cached, e := s.preview(context.Background(), ct.ID, id, "screen")
+	if e != nil || !cached.(Preview).Cached || server.Ops.Load() != ops {
+		t.Fatal("cache miss", e)
+	}
+	thumb, e := s.preview(context.Background(), ct.ID, id, "thumbnail")
+	if e != nil || thumb.(Preview).Path == screen.Path {
+		t.Fatal("thumbnail contaminated screen cache")
+	}
+	s.contents[0].Files[0].Size++
+	changed, e := s.preview(context.Background(), ct.ID, id, "screen")
+	if e != nil || changed.(Preview).Path == screen.Path {
+		t.Fatal("stale identity reused", e)
+	}
+}
+func TestStreamingDigestSurvivesRestartAndLargerChunks(t *testing.T) {
+	dir := t.TempDir()
+	data := []byte(strings.Repeat("abcdefg", (5<<20)/7))
+	if e := os.WriteFile(filepath.Join(dir, "DSC002.JPG"), data, 0600); e != nil {
+		t.Fatal(e)
+	}
+	s, server := fakeEngine(t, dir)
+	if _, e := s.list(context.Background()); e != nil {
+		t.Fatal(e)
+	}
+	ct := s.contents[0]
+	fid := ct.Files[0].ID
+	part, e := s.transferChunk(context.Background(), ct.ID, fid, "", 2)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if part.(Transfer).Offset != 2<<20 {
+		t.Fatal("unexpected committed offset")
+	}
+	s.transferHasher = nil // a process restart discards the in-memory digest
+	done, e := s.transferChunk(context.Background(), ct.ID, fid, part.(Transfer).Key, 8)
+	if e != nil {
+		t.Fatal(e)
+	}
+	sum := sha256.Sum256(data)
+	if done.(Transfer).SHA256 != hex.EncodeToString(sum[:]) {
+		t.Fatal("resumed digest is wrong")
+	}
+	req := server.ContentRequests()
+	if len(req) != 2 || req[1].Offset != 2<<20 {
+		t.Fatal("re-downloaded committed prefix")
 	}
 }
