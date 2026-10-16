@@ -1,0 +1,3 @@
+[submodule "vendor/alpha2go"]
+	path = vendor/alpha2go
+	url = https://github.com/knallli/alpha2go.git
