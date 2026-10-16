@@ -1,3 +1,4 @@
+import CoreImage
 import Foundation
 import ImageIO
 import Observation
@@ -52,10 +53,36 @@ private final class PhotoBox {
     (image.cgImage?.bytesPerRow ?? 0) * (image.cgImage?.height ?? 0)
   }
 }
-enum PhotoDecoder {
-  static func decode(_ url: URL, maxDimension: Int) async throws -> UIImage {
-    try await Task.detached(priority: .userInitiated) {
-      try Task.checkCancellation()
+private struct DecodedPhoto {
+  let image: UIImage
+  let nativeRaw: Bool
+}
+// Serialize demosaicing and bitmap decode so adjacent RAW pages cannot create
+// several full-sensor working buffers simultaneously.
+private actor PhotoDecodeWorker {
+  static let shared = PhotoDecodeWorker()
+  private let context = CIContext(options: [.cacheIntermediates: false])
+  func decode(_ url: URL, maxDimension: Int, raw: Bool) throws -> DecodedPhoto {
+    try Task.checkCancellation()
+    return try autoreleasepool {
+      if raw, let filter = CIRAWFilter(imageURL: url), filter.nativeSize.width > 0 {
+        filter.isDraftModeEnabled = false
+        filter.scaleFactor = Float(
+          min(1, Double(maxDimension) / max(filter.nativeSize.width, filter.nativeSize.height)))
+        if let output = filter.outputImage {
+          try Task.checkCancellation()
+          let scale = min(1, Double(maxDimension) / max(output.extent.width, output.extent.height))
+          let image = output.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+          let rect = CGRect(
+            x: image.extent.minX, y: image.extent.minY, width: floor(image.extent.width),
+            height: floor(image.extent.height))
+          if let cg = context.createCGImage(
+            image, from: rect, format: .RGBA8, colorSpace: CGColorSpace(name: CGColorSpace.sRGB))
+          {
+            return DecodedPhoto(image: UIImage(cgImage: cg), nativeRaw: true)
+          }
+        }
+      }
       guard
         let source = CGImageSourceCreateWithURL(
           url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
@@ -67,11 +94,22 @@ enum PhotoDecoder {
             kCGImageSourceThumbnailMaxPixelSize: maxDimension,
             kCGImageSourceShouldCacheImmediately: true,
           ] as CFDictionary)
-      else {
-        throw CameraFailure(message: "系统无法解码这份预览。可下载原文件后再查看或分享。")
-      }
-      return UIImage(cgImage: image)
-    }.value
+      else { throw CameraFailure(message: "系统无法解码这份预览。可下载原文件后再查看或分享。") }
+      return DecodedPhoto(image: UIImage(cgImage: image), nativeRaw: false)
+    }
+  }
+}
+enum PhotoDecoder {
+  static func decode(_ url: URL, maxDimension: Int) async throws -> UIImage {
+    try await PhotoDecodeWorker.shared.decode(url, maxDimension: maxDimension, raw: false).image
+  }
+  static func original(_ url: URL, maxDimension: Int) async throws -> (
+    image: UIImage, embeddedRaw: Bool
+  ) {
+    let raw = url.pathExtension.lowercased() == "arw"
+    let result = try await PhotoDecodeWorker.shared.decode(
+      url, maxDimension: maxDimension, raw: raw)
+    return (result.image, raw && !result.nativeRaw)
   }
 }
 extension MediaFile {
@@ -97,8 +135,9 @@ extension CameraModel {
     guard let file = item.previewFile,
       let t = transfers.first(where: {
         $0.complete
-          && ($0.key == file.key
-            || ($0.selection.contentID == item.id && $0.selection.file.ID == file.id))
+          && (file.key != nil
+            ? $0.key == file.key
+            : ($0.selection.contentID == item.id && $0.selection.file.ID == file.id))
       }),
       FileManager.default.fileExists(atPath: t.path)
     else { return nil }
@@ -114,7 +153,7 @@ extension CameraModel {
     let token = sessionID
     guard let file = item.previewFile else { throw CameraFailure(message: "这组影像没有文件") }
     let url: URL
-    let quality: String
+    var quality: String
     if original, !file.video, let local = localOriginal(item) {
       url = local
       quality = "原图"
@@ -125,7 +164,14 @@ extension CameraModel {
       url = URL(fileURLWithPath: preview.path)
       quality = "清晰预览"
     }
-    let image = try await PhotoDecoder.decode(url, maxDimension: original ? 4096 : 2400)
+    let image: UIImage
+    if original && !file.video {
+      let result = try await PhotoDecoder.original(url, maxDimension: 4096)
+      image = result.image
+      if result.embeddedRaw { quality = "原文件内嵌预览" }
+    } else {
+      image = try await PhotoDecoder.decode(url, maxDimension: 2400)
+    }
     try Task.checkCancellation()
     guard token == sessionID else { throw CancellationError() }
     let photo = RenderedPhoto(image: image, quality: quality)
