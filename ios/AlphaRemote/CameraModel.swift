@@ -27,12 +27,14 @@ import SwiftUI
   private var monitor: Task<Void, Never>?
   private var video: Task<Void, Never>?
   private var sessionID = UUID()
+  private var disconnection: Task<Void, Never>?
+  private var changingLive = false
   private var reconnectOnForeground = false
   private var resumeImport: (Int, Int, String?)?
   private var paused = false
   private var thumbnailRequests = Set<Int>()
   var properties: [CameraProperty] { snapshot?.properties ?? [] }
-  var ready: Bool { connected && !busy && !connecting }
+  var ready: Bool { connected && !busy && !connecting && !changingLive }
   var status: String { connecting ? "正在连接" : connected ? "相机已连接" : "尚未连接" }
   init() {
     do { try KeychainStore.consumeLocalImport() } catch { self.error = error.localizedDescription }
@@ -65,6 +67,8 @@ import SwiftUI
       }
     }
     do {
+      await disconnection?.value
+      guard token == sessionID else { return }
       let data = try JSONEncoder().encode(access)
       let object = try JSONSerialization.jsonObject(with: data)
       let result: CameraSnapshot = try await bridge.call("connect", ["access": object])
@@ -85,7 +89,9 @@ import SwiftUI
       message = "连接未完成，请检查相机与局域网权限。"
     }
   }
-  func disconnect() {
+  func disconnect(preserveImport: Bool = false) {
+    if !preserveImport { resumeImport = nil }
+    changingLive = false
     sessionID = UUID()
     monitor?.cancel()
     video?.cancel()
@@ -100,12 +106,12 @@ import SwiftUI
     importing = false
     snapshot = nil
     message = "连接已断开，导入进度已保存。"
-    Task { let _: Bool? = try? await bridge.call("disconnect") }
+    disconnection = Task { [bridge] in let _: Bool? = try? await bridge.call("disconnect") }
   }
   func sceneChanged(_ phase: ScenePhase) {
     if phase == .background {
-      reconnectOnForeground = connected
-      disconnect()
+      reconnectOnForeground = connected || connecting
+      disconnect(preserveImport: true)
     } else if phase == .active && reconnectOnForeground {
       reconnectOnForeground = false
       Task {
@@ -117,10 +123,13 @@ import SwiftUI
     }
   }
   func startLive() async {
-    guard connected else { return }
+    guard connected, !changingLive else { return }
+    let token = sessionID
+    changingLive = true
+    defer { if token == sessionID { changingLive = false } }
     do {
       let _: Bool = try await bridge.call("liveStart")
-      guard connected else { return }
+      guard connected, token == sessionID else { return }
       live = true
       video?.cancel()
       video = Task { [weak self] in
@@ -131,11 +140,17 @@ import SwiftUI
         }
       }
     } catch {
-      self.error = error.localizedDescription
-      live = false
+      if token == sessionID {
+        self.error = error.localizedDescription
+        live = false
+      }
     }
   }
   func stopLive() async {
+    guard !changingLive else { return }
+    let token = sessionID
+    changingLive = true
+    defer { if token == sessionID { changingLive = false } }
     video?.cancel()
     live = false
     frame = nil
@@ -143,6 +158,7 @@ import SwiftUI
     let _: Bool? = try? await bridge.call("liveStop")
   }
   private func startMonitor() {
+    let token = sessionID
     monitor?.cancel()
     monitor = Task { [weak self] in
       while let self, !Task.isCancelled, self.connected {
@@ -151,9 +167,9 @@ import SwiftUI
         if self.busy || self.importing { continue }
         do {
           let s: CameraSnapshot = try await self.bridge.call("status")
-          if self.connected { self.snapshot = s }
+          if self.connected, token == self.sessionID { self.snapshot = s }
         } catch {
-          if !Task.isCancelled {
+          if !Task.isCancelled, token == self.sessionID {
             self.error = error.localizedDescription
             self.disconnect()
           }
@@ -175,32 +191,39 @@ import SwiftUI
     } catch { if token == sessionID { self.error = error.localizedDescription } }
   }
   func refreshStatus() async {
+    let token = sessionID
     if connected {
       do {
         let s: CameraSnapshot = try await bridge.call("status")
-        if connected { snapshot = s }
+        if connected, token == sessionID { snapshot = s }
       } catch { self.error = error.localizedDescription }
     }
   }
   func set(_ property: CameraProperty, to value: String) async {
     guard ready else { return }
     busy = true
-    defer { busy = false }
+    let token = sessionID
+    defer { if token == sessionID { busy = false } }
     do {
       let _: CameraProperty = try await bridge.call("set", ["code": property.code, "value": value])
+      guard token == sessionID else { return }
       await refreshStatus()
+      guard token == sessionID else { return }
       message = "\(property.title)已更新并读回确认"
-    } catch { self.error = error.localizedDescription }
+    } catch { if token == sessionID { self.error = error.localizedDescription } }
   }
   func loadMedia() async {
     guard ready else { return }
     busy = true
-    defer { busy = false }
+    let token = sessionID
+    defer { if token == sessionID { busy = false } }
     do {
-      media = try await bridge.call("list")
+      let result: [CameraMedia] = try await bridge.call("list")
+      guard token == sessionID else { return }
+      media = result
       message = "已读取 \(media.count) 组影像"
       thumbnails.removeAll()
-    } catch { self.error = error.localizedDescription }
+    } catch { if token == sessionID { self.error = error.localizedDescription } }
   }
   func thumbnail(_ item: CameraMedia) async {
     guard connected, !importing, thumbnails[item.id] == nil, !thumbnailRequests.contains(item.id),
@@ -272,53 +295,65 @@ import SwiftUI
   func fetchCapture() async {
     guard ready else { return }
     busy = true
-    defer { busy = false }
+    let token = sessionID
+    defer { if token == sessionID { busy = false } }
     do {
       let path: String = try await bridge.call("fetchCapture")
+      guard token == sessionID else { return }
       importedFile = URL(fileURLWithPath: path)
       message = "新照片已回传到 iPhone"
-    } catch { self.error = error.localizedDescription }
+    } catch { if token == sessionID { self.error = error.localizedDescription } }
   }
   func backup() async {
     guard ready else { return }
     busy = true
-    defer { busy = false }
+    let token = sessionID
+    defer { if token == sessionID { busy = false } }
     do {
       let path: String = try await bridge.call("backup")
+      guard token == sessionID else { return }
       importedFile = URL(fileURLWithPath: path)
       message = "相机设置已备份"
-    } catch { self.error = error.localizedDescription }
+    } catch { if token == sessionID { self.error = error.localizedDescription } }
   }
   func upload(_ url: URL, op: String, slot: Int = 1) async {
     guard ready else { return }
     busy = true
-    defer { busy = false }
+    let token = sessionID
+    defer { if token == sessionID { busy = false } }
     let granted = url.startAccessingSecurityScopedResource()
     defer { if granted { url.stopAccessingSecurityScopedResource() } }
     do {
-      message = try await bridge.call(
+      let result = try await bridge.call(
         op, ["path": url.path, "name": url.lastPathComponent, "slot": slot, "confirm": true],
         as: String.self)
+      guard token == sessionID else { return }
+      message = result
       await refreshStatus()
-    } catch { self.error = error.localizedDescription }
+    } catch { if token == sessionID { self.error = error.localizedDescription } }
   }
   func diagnose(_ op: String) async {
     guard ready else { return }
     busy = true
-    defer { busy = false }
+    let token = sessionID
+    defer { if token == sessionID { busy = false } }
     do {
-      diagnostics = try await bridge.text(op)
+      let result = try await bridge.text(op)
+      guard token == sessionID else { return }
+      diagnostics = result
       showDiagnostics = true
-    } catch { self.error = error.localizedDescription }
+    } catch { if token == sessionID { self.error = error.localizedDescription } }
   }
   func toggleOSD() async {
     guard ready else { return }
     busy = true
-    defer { busy = false }
+    let token = sessionID
+    defer { if token == sessionID { busy = false } }
     do {
       let b64: String? = try await bridge.call("osd", ["enabled": osd == nil])
+      guard token == sessionID else { return }
       osd = b64.flatMap { Data(base64Encoded: $0) }.flatMap { UIImage(data: $0) }
-    } catch { self.error = error.localizedDescription }
+    } catch { if token == sessionID { self.error = error.localizedDescription } }
   }
   func syncClock() async {
     let f = DateFormatter()
