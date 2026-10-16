@@ -28,7 +28,7 @@ import SwiftUI
   private var video: Task<Void, Never>?
   private var sessionID = UUID()
   private var reconnectOnForeground = false
-  private var resumeImport: (Int, Int)?
+  private var resumeImport: (Int, Int, String?)?
   private var paused = false
   private var thumbnailRequests = Set<Int>()
   var properties: [CameraProperty] { snapshot?.properties ?? [] }
@@ -110,7 +110,9 @@ import SwiftUI
       reconnectOnForeground = false
       Task {
         await connect()
-        if connected, let next = resumeImport { await importFile(next.0, next.1) }
+        if connected, let next = resumeImport {
+          await importFile(next.0, next.1, expectedKey: next.2)
+        }
       }
     }
   }
@@ -219,12 +221,13 @@ import SwiftUI
       self.error = error.localizedDescription
     }
   }
-  func importFile(_ id: Int, _ fileID: Int) async {
+  func importFile(_ id: Int, _ fileID: Int, expectedKey: String? = nil) async {
     guard ready, !importing else { return }
     importing = true
     busy = true
     paused = false
-    resumeImport = (id, fileID)
+    resumeImport = (id, fileID, expectedKey)
+    var currentKey = expectedKey
     let token = sessionID
     defer {
       if token == sessionID {
@@ -234,8 +237,11 @@ import SwiftUI
     }
     do {
       while !paused && token == sessionID {
-        let t: CameraTransfer = try await bridge.call("transfer", ["id": id, "fileID": fileID])
+        let t: CameraTransfer = try await bridge.call(
+          "transfer", ["id": id, "fileID": fileID, "name": currentKey ?? ""])
         guard token == sessionID else { return }
+        currentKey = t.key
+        resumeImport = (id, fileID, currentKey)
         if let i = transfers.firstIndex(where: { $0.id == t.id }) {
           transfers[i] = t
         } else {

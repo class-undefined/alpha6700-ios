@@ -295,6 +295,16 @@ func (s *Engine) pulse(ctx context.Context, code uint16) (err error) {
 	}
 }
 func (s *Engine) availableID(ctx context.Context, code, id uint16) error {
+	if code == 0xD208 {
+		idle, e := s.prop(ctx, 0xD20C)
+		if e != nil {
+			return e
+		}
+		if idle.Current.Int != 1 {
+			return errors.New("Camera must be idle before remote button presses")
+		}
+	}
+
 	p, e := s.prop(ctx, code)
 	if e != nil {
 		return e
@@ -386,6 +396,13 @@ func (s *Engine) dispatch(ctx context.Context, r Request) (any, error) {
 		}
 		return true, s.client.SonyControl(ctx, code, 6, ptpip.SonyValue{Int: int64(r.X)<<16 | int64(r.Y)})
 	case "cancelTracking":
+		p, e := s.prop(ctx, 0xD285)
+		if e != nil {
+			return nil, e
+		}
+		if p.Current.Int != 1 {
+			return nil, errors.New("Touch tracking cancel is currently unavailable")
+		}
 		return true, s.pulse(ctx, ptpip.SonyCtlRemoteTouchCancel)
 	case "button":
 		if e := s.availableID(ctx, 0xD208, r.Code); e != nil {
@@ -408,7 +425,7 @@ func (s *Engine) dispatch(ctx context.Context, r Request) (any, error) {
 		_, e := s.client.SonyGetContentsCompressed(ctx, 1, r.ID, r.FileID, ptpip.SonyThumbnail, &b)
 		return b.Bytes(), e
 	case "transfer":
-		return s.transferChunk(ctx, r.ID, r.FileID)
+		return s.transferChunk(ctx, r.ID, r.FileID, r.Name)
 	case "fetchCapture":
 		return s.fetchCapture(ctx)
 	case "delete":

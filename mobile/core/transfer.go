@@ -168,7 +168,7 @@ func commitChunk(ctx context.Context, c chunkSource, sel Selection, f *os.File, 
 	}
 	return offset + uint64(n), nil
 }
-func (s *Engine) transferChunk(ctx context.Context, id uint32, fileID uint16) (any, error) {
+func (s *Engine) transferChunk(ctx context.Context, id uint32, fileID uint16, expectedKey string) (any, error) {
 	if !s.listed {
 		if _, e := s.list(ctx); e != nil {
 			return nil, e
@@ -182,6 +182,9 @@ func (s *Engine) transferChunk(ctx context.Context, id uint32, fileID uint16) (a
 		return nil, errors.New("Invalid file size")
 	}
 	key := transferKey(sel)
+	if expectedKey != "" && expectedKey != key {
+		return nil, errors.New("The camera file identity changed; this queued download cannot resume")
+	}
 	manifest := filepath.Join(s.root, key+".json")
 	part := filepath.Join(s.root, key+".part")
 	t := Transfer{Key: key, Selection: sel, Size: sel.File.Size, Name: filepath.Base(sel.File.Path), Status: "paused"}
@@ -194,6 +197,9 @@ func (s *Engine) transferChunk(ctx context.Context, id uint32, fileID uint16) (a
 		}
 	} else if !errors.Is(e, os.ErrNotExist) {
 		return nil, e
+	}
+	if t.Path != "" {
+		t.Path = filepath.Join(s.root, filepath.Base(t.Path))
 	}
 	if t.Status == "complete" {
 		if st, e := os.Stat(t.Path); e == nil && uint64(st.Size()) == t.Size {
@@ -269,6 +275,9 @@ func (s *Engine) queue() (any, error) {
 		}
 		var t Transfer
 		if json.Unmarshal(b, &t) == nil && t.Key != "" {
+			if t.Path != "" {
+				t.Path = filepath.Join(s.root, filepath.Base(t.Path))
+			}
 			out = append(out, t)
 		}
 	}

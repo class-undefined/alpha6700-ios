@@ -142,7 +142,7 @@ func TestImportPersistsAndVerifiesIdentity(t *testing.T) {
 		t.Fatal(s.contents)
 	}
 	ct := s.contents[0]
-	v, e := s.transferChunk(context.Background(), ct.ID, ct.Files[0].ID)
+	v, e := s.transferChunk(context.Background(), ct.ID, ct.Files[0].ID, "")
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -151,8 +151,11 @@ func TestImportPersistsAndVerifiesIdentity(t *testing.T) {
 	if e != nil || string(b) != string(data) || tr.Status != "complete" || len(tr.SHA256) != 64 {
 		t.Fatal(tr, e)
 	}
-	if _, e = s.transferChunk(context.Background(), ct.ID, ct.Files[0].ID); e != nil {
+	if _, e = s.transferChunk(context.Background(), ct.ID, ct.Files[0].ID, ""); e != nil {
 		t.Fatal("completed transfer not idempotent", e)
+	}
+	if _, e = s.transferChunk(context.Background(), ct.ID, ct.Files[0].ID, "wrong-identity"); e == nil {
+		t.Fatal("stale queue resumed a different file")
 	}
 	changed := tr.Selection
 	changed.File.Size++

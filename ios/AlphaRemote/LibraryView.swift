@@ -91,7 +91,7 @@ struct LibraryView: View {
                   Button("暂停导入") { camera.pauseImport() }
                 } else {
                   Button("继续导入") {
-                    Task { await camera.importFile(t.selection.contentID, t.selection.file.ID) }
+                    Task { await camera.importFile(t.selection.contentID, t.selection.file.ID, expectedKey: t.key) }
                   }.disabled(!camera.ready)
                 }
               }
