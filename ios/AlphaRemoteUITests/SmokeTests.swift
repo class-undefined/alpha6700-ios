@@ -50,6 +50,10 @@ extension SmokeTests {
         timeout: 3))
     surface.swipeLeft()
     XCTAssertTrue(waitFor(title, contains: "TEST02.JPG"))
+    XCTAssertTrue(waitFor(quality, contains: "2400 × 1600"))
+    XCTAssertGreaterThan(
+      app.images["photoImage-2"].frame.width, app.frame.width * 0.9,
+      "Replacing a thumbnail must refit the large image to screen width")
     app.scrollViews["zoomPhoto-2"].swipeLeft()
     XCTAssertTrue(waitFor(title, contains: "TEST03.JPG"))
     app.buttons["上一张"].tap()

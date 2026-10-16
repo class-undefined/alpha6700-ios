@@ -235,14 +235,30 @@ struct PhotoPager: UIViewControllerRepresentable {
   }
   private func setImage(_ image: UIImage) {
     let relativeZoom = scroll.minimumZoomScale > 0 ? scroll.zoomScale / scroll.minimumZoomScale : 1
-    scroll.zoomScale = 1
+    let oldCenter = imageView.convert(
+      CGPoint(x: scroll.bounds.midX, y: scroll.bounds.midY), from: scroll)
+    let normalized = CGPoint(
+      x: imageView.bounds.width > 0 ? oldCenter.x / imageView.bounds.width : 0.5,
+      y: imageView.bounds.height > 0 ? oldCenter.y / imageView.bounds.height : 0.5)
+    // Thumbnail fit can be greater than 1. Lower the old bounds BEFORE
+    // resetting zoom, otherwise UIKit clamps 1 and carries that transform
+    // into the new image's frame, shrinking the high-resolution replacement.
+    scroll.minimumZoomScale = 0.001
+    scroll.maximumZoomScale = 64
+    scroll.setZoomScale(1, animated: false)
+    scroll.contentInset = .zero
     imageView.image = image
     imageView.frame = CGRect(origin: .zero, size: image.size)
     scroll.contentSize = image.size
     fitImage()
     if relativeZoom > 1.05 {
-      scroll.setZoomScale(
-        min(scroll.maximumZoomScale, scroll.minimumZoomScale * relativeZoom), animated: false)
+      let scale = min(scroll.maximumZoomScale, scroll.minimumZoomScale * relativeZoom)
+      let size = CGSize(width: scroll.bounds.width / scale, height: scroll.bounds.height / scale)
+      scroll.zoom(
+        to: CGRect(
+          x: normalized.x * image.size.width - size.width / 2,
+          y: normalized.y * image.size.height - size.height / 2,
+          width: size.width, height: size.height), animated: false)
     }
   }
   private func fitImage() {
