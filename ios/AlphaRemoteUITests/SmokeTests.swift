@@ -18,7 +18,7 @@ final class SmokeTests: XCTestCase {
     }
   }
   @MainActor private func save(_ app: XCUIApplication, _ name: String) {
-    let attachment = XCTAttachment(screenshot: app.screenshot())
+    let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
     attachment.name = name
     attachment.lifetime = .keepAlways
     add(attachment)
@@ -115,11 +115,9 @@ extension SmokeTests {
     XCTAssertTrue(app.buttons["exitFullScreen"].exists)
     XCTAssertFalse(app.tabBars.firstMatch.isHittable)
     XCTAssertGreaterThan(image.frame.width, portraitWidth * 1.2)
-    let renderedLandscape = NSPredicate { _, _ in
-      let size=app.screenshot().image.size
-      return size.width>size.height
-    }
-    XCTAssertTrue(expectation(for:renderedLandscape,evaluatedWith:app).wait(timeout:8))
+    XCTAssertLessThanOrEqual(image.frame.maxX, app.frame.maxX + 2)
+    XCTAssertLessThanOrEqual(image.frame.maxY, app.frame.maxY + 2)
+    XCTAssertTrue(app.buttons["exitFullScreen"].isHittable)
     save(app, "09-fullscreen-live")
     app.buttons["exitFullScreen"].tap()
     XCTAssertTrue(
