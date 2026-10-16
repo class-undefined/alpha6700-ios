@@ -128,7 +128,7 @@ func (s *Engine) connect(ctx context.Context, a Access) (any, error) {
 	s.mu.Lock()
 	s.tunnel = d
 	s.mu.Unlock()
-	c, err := ptpip.Dial(ctx, net.JoinHostPort(strings.Trim(a.Host, "[]"), "15740"), ptpip.Options{Name: "Alpha Remote iOS", GUID: s.guid, IOTimeout: 8 * time.Second, DialContext: d.DialContext})
+	c, err := ptpip.Dial(ctx, net.JoinHostPort(strings.Trim(a.Host, "[]"), "15740"), ptpip.Options{Name: "Alpha Remote iOS", GUID: s.guid, IOTimeout: 30 * time.Second, DialContext: d.DialContext})
 	if err != nil {
 		s.close()
 		return nil, err
